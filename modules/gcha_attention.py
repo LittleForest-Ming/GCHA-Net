@@ -9,6 +9,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import warnings
+
+
+class PerformanceWarning(UserWarning):
+    """Warning for performance-related issues"""
+    pass
 
 
 class GCHALayer(nn.Module):
@@ -64,31 +70,56 @@ class GCHALayer(nn.Module):
         Compute the static geometric mask M_geo.
         
         Args:
-            x_tilde: Spatial positions of feature map, shape (HW,) or (HW, 2)
-            x_hat: Predicted positions for each query, shape (N_total, HW) or (N_total, HW, 2)
+            x_tilde: Spatial positions of feature map
+                     - Shape (HW,): 1D positions (automatically expanded to (HW, 1))
+                     - Shape (HW, d): d-dimensional positions (e.g., 2D or 3D coordinates)
+            x_hat: Predicted positions for each query
+                   - Shape (N_total, HW): 1D positions (automatically expanded to (N_total, HW, 1))
+                   - Shape (N_total, HW, d): d-dimensional positions
             
         Returns:
             M_geo: Geometric mask of shape (N_total, HW)
                    M_geo[i, j] = 0 if |x̃_j - x̂_i,j| < ε
                    M_geo[i, j] = -∞ otherwise
+                   
+        Note:
+            For 1D inputs, they are automatically expanded to 2D with dimension 1.
+            Ensure that x_tilde and x_hat have matching spatial dimensions (d).
         """
-        # Handle different input shapes
+        # Handle different input shapes with validation
         if x_tilde.dim() == 1:
-            # Assume 1D positions, expand to (HW, 1)
+            # 1D positions, expand to (HW, 1)
             x_tilde = x_tilde.unsqueeze(-1)
+        elif x_tilde.dim() != 2:
+            raise ValueError(f"x_tilde must be 1D or 2D, got {x_tilde.dim()}D")
         
         if x_hat.dim() == 2:
-            # Assume 1D positions, expand to (N_total, HW, 1)
+            # 1D positions, expand to (N_total, HW, 1)
             x_hat = x_hat.unsqueeze(-1)
+        elif x_hat.dim() != 3:
+            raise ValueError(f"x_hat must be 2D or 3D, got {x_hat.dim()}D")
         
-        # Compute the absolute difference |x̃_j - x̂_i,j|
+        # Validate matching dimensions
+        if x_tilde.size(-1) != x_hat.size(-1):
+            raise ValueError(
+                f"Spatial dimensions must match: x_tilde has {x_tilde.size(-1)} "
+                f"dimensions but x_hat has {x_hat.size(-1)} dimensions"
+            )
+        
+        # Validate shape compatibility
+        if x_tilde.size(0) != x_hat.size(1):
+            raise ValueError(
+                f"HW dimension mismatch: x_tilde has {x_tilde.size(0)} positions "
+                f"but x_hat expects {x_hat.size(1)} positions"
+            )
+        
+        # Compute the L2 distance |x̃_j - x̂_i,j|
         # x_tilde: (HW, dim) -> expand to (1, HW, dim)
         # x_hat: (N_total, HW, dim)
         x_tilde_expanded = x_tilde.unsqueeze(0)  # (1, HW, dim)
         
-        # Compute L2 distance
-        diff = torch.abs(x_tilde_expanded - x_hat)  # (N_total, HW, dim)
-        distance = torch.norm(diff, p=2, dim=-1)  # (N_total, HW)
+        # Compute L2 distance efficiently
+        distance = torch.norm(x_tilde_expanded - x_hat, p=2, dim=-1)  # (N_total, HW)
         
         # Create mask: 0 if distance < epsilon, -inf otherwise
         M_geo = torch.where(
@@ -124,11 +155,25 @@ class GCHALayer(nn.Module):
         Returns:
             output: Attention output of shape (batch_size, n_total, d_model)
             attention_weights: Attention weights of shape (batch_size, num_heads, n_total, hw)
+            
+        Note:
+            Computing the geometric mask during forward pass (by providing x_tilde and x_hat)
+            can be expensive and should be avoided in production. For better performance,
+            pre-compute the mask using set_geometric_mask() before the forward pass.
         """
         batch_size = query.size(0)
+        n_queries = query.size(1)
+        n_keys = key.size(1)
         
         # If geometric positions are provided, compute the mask
+        # Warning: This can be expensive in the forward pass
         if x_tilde is not None and x_hat is not None:
+            warnings.warn(
+                "Computing geometric mask during forward pass. For better performance, "
+                "pre-compute the mask using set_geometric_mask() before forward pass.",
+                PerformanceWarning,
+                stacklevel=2
+            )
             self.M_geo = self.compute_geometric_mask(x_tilde, x_hat)
         
         # Linear projections and reshape for multi-head attention
@@ -149,6 +194,13 @@ class GCHALayer(nn.Module):
         # Add geometric mask M_geo
         # M_geo shape: (N_total, HW) -> expand to (1, 1, N_total, HW) for broadcasting
         if self.M_geo is not None:
+            # Validate mask shape matches the current inputs
+            if self.M_geo.shape != (n_queries, n_keys):
+                raise ValueError(
+                    f"Geometric mask shape {self.M_geo.shape} does not match "
+                    f"expected shape ({n_queries}, {n_keys}). "
+                    f"Please re-compute the mask with correct dimensions."
+                )
             M_geo_expanded = self.M_geo.unsqueeze(0).unsqueeze(0)  # (1, 1, N_total, HW)
             scores = scores + M_geo_expanded
         
