@@ -13,12 +13,12 @@ def example_segmentation():
     print("Example: Semantic Segmentation with GCHA-Net")
     print("=" * 60)
     
-    # Create model
+    # Create model (smaller for demonstration)
     model = GCHANet(
         in_channels=3,
         num_classes=19,  # e.g., Cityscapes has 19 classes
-        base_channels=64,
-        num_blocks=[2, 2, 6, 2],
+        base_channels=32,
+        num_blocks=[1, 1, 2, 1],
         num_heads=[2, 4, 8, 16],
         grid_size=(7, 7),
         N_total=256,
@@ -30,14 +30,14 @@ def example_segmentation():
     print(f"\nModel created:")
     print(f"  - Input channels: 3 (RGB)")
     print(f"  - Output classes: 19")
-    print(f"  - Architecture: 4 stages with [2, 2, 6, 2] GCHA blocks")
+    print(f"  - Architecture: 4 stages with [1, 1, 2, 1] GCHA blocks")
     print(f"  - Attention heads: [2, 4, 8, 16] per stage")
     
     # Set model to evaluation mode
     model.eval()
     
-    # Create dummy input (batch_size=1, channels=3, height=512, width=512)
-    x = torch.randn(1, 3, 512, 512)
+    # Create dummy input (batch_size=1, channels=3, height=256, width=256)
+    x = torch.randn(1, 3, 256, 256)
     print(f"\nInput shape: {x.shape}")
     
     # Forward pass
@@ -68,19 +68,19 @@ def example_classification():
     print("Example: Image Classification with GCHA-Net")
     print("=" * 60)
     
-    # Create model
+    # Create model (smaller for demonstration)
     model = GCHANet(
         in_channels=3,
-        num_classes=1000,  # e.g., ImageNet has 1000 classes
-        base_channels=64,
-        num_blocks=[2, 2, 6, 2],
+        num_classes=100,  # Reduced for demonstration
+        base_channels=32,
+        num_blocks=[1, 1, 2, 1],
         num_heads=[2, 4, 8, 16],
         task='classification'
     )
     
     print(f"\nModel created:")
     print(f"  - Input channels: 3 (RGB)")
-    print(f"  - Output classes: 1000 (ImageNet)")
+    print(f"  - Output classes: 100")
     print(f"  - Task: Classification")
     
     # Set model to evaluation mode
