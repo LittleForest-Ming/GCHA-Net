@@ -233,7 +233,8 @@ class GCHABlock(nn.Module):
             nn.Dropout(dropout)
         )
         
-        self.norm = nn.GroupNorm(32, in_channels)
+        num_groups = min(32, in_channels)
+        self.norm = nn.GroupNorm(num_groups, in_channels)
         
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """

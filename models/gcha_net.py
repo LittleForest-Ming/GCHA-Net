@@ -50,12 +50,13 @@ class GCHAEncoder(nn.Module):
         self.num_stages = len(num_blocks)
         
         # Stem convolution
+        num_groups = min(32, base_channels)
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, base_channels, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.GroupNorm(32, base_channels),
+            nn.GroupNorm(num_groups, base_channels),
             nn.GELU(),
             nn.Conv2d(base_channels, base_channels, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.GroupNorm(32, base_channels),
+            nn.GroupNorm(num_groups, base_channels),
             nn.GELU()
         )
         
@@ -69,10 +70,11 @@ class GCHAEncoder(nn.Module):
             
             # Downsample if not first stage
             if stage_idx > 0:
+                num_groups = min(32, out_channels)
                 stage_blocks.append(
                     nn.Sequential(
                         nn.Conv2d(current_channels, out_channels, kernel_size=3, stride=2, padding=1, bias=False),
-                        nn.GroupNorm(32, out_channels),
+                        nn.GroupNorm(num_groups, out_channels),
                         nn.GELU()
                     )
                 )
@@ -143,18 +145,20 @@ class GCHADecoder(nn.Module):
         self.upsample_blocks = nn.ModuleList()
         
         for i in range(self.num_stages - 1, 0, -1):
+            num_groups = min(32, in_channels_list[i-1])
             self.upsample_blocks.append(
                 nn.Sequential(
                     nn.ConvTranspose2d(in_channels_list[i], in_channels_list[i-1], kernel_size=2, stride=2),
-                    nn.GroupNorm(32, in_channels_list[i-1]),
+                    nn.GroupNorm(num_groups, in_channels_list[i-1]),
                     nn.GELU()
                 )
             )
         
         # Final output head
+        num_groups = min(32, out_channels)
         self.head = nn.Sequential(
             nn.Conv2d(in_channels_list[0], out_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(32, out_channels),
+            nn.GroupNorm(num_groups, out_channels),
             nn.GELU(),
             nn.Conv2d(out_channels, num_classes, kernel_size=1)
         )
