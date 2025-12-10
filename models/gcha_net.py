@@ -454,11 +454,13 @@ class GCHANet(nn.Module):
         
     def _reset_parameters(self):
         """Initialize parameters for non-backbone modules."""
-        # Initialize FPN parameters
+        # Initialize FPN, decoder, and head parameters
         for module in [self.fpn, self.decoder, self.classification_head, self.regression_head]:
             for p in module.parameters():
                 if p.dim() > 1:
                     nn.init.xavier_uniform_(p)
+                elif p.dim() == 1:
+                    nn.init.zeros_(p)
         
         # Initialize query embeddings
         nn.init.normal_(self.query_embed.weight, std=0.01)
