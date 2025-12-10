@@ -1,0 +1,85 @@
+# GCHA-Net Default Configuration
+# Hyperparameters for training and model architecture
+
+# Model Architecture
+model:
+  in_channels: 3
+  num_classes: 19  # Agroscapes/Cityscapes default
+  embed_dim: 256
+  num_heads: 8
+  n_total: 64  # Total number of anchors (parameter grid A)
+  epsilon: 1.0e-6  # Epsilon for numerical stability in distance computation
+  num_layers: 4  # Number of GCHA transformer blocks
+  mlp_ratio: 4.0
+  dropout: 0.1
+  base_channels: 64
+  num_stages: 4
+
+# Training Parameters
+training:
+  batch_size: 8
+  num_epochs: 100
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_epochs: 5
+  
+  # Optimizer
+  optimizer:
+    type: "AdamW"
+    betas: [0.9, 0.999]
+    
+  # Learning rate scheduler
+  scheduler:
+    type: "CosineAnnealingLR"
+    T_max: 100
+    eta_min: 1.0e-6
+    
+  # Loss function
+  loss:
+    type: "CrossEntropyLoss"
+    ignore_index: 255
+    label_smoothing: 0.1
+
+# Data
+data:
+  dataset: "agroscapes"  # or "cityscapes"
+  data_root: "./data/agroscapes"
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  
+  # Image preprocessing
+  image_size: [512, 512]  # [H, W]
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  
+  # Data augmentation
+  augmentation:
+    random_flip: true
+    random_crop: true
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_scale: [0.5, 2.0]
+
+# System
+system:
+  num_workers: 4
+  pin_memory: true
+  seed: 42
+  gpus: 1
+  precision: 32  # 16 for mixed precision, 32 for full precision
+  
+# Logging and Checkpointing
+logging:
+  log_dir: "./logs"
+  checkpoint_dir: "./checkpoints"
+  save_freq: 5  # Save checkpoint every N epochs
+  log_freq: 10  # Log metrics every N iterations
+  
+# Validation
+validation:
+  val_freq: 1  # Validate every N epochs
+  metrics: ["mIoU", "accuracy", "precision", "recall"]
