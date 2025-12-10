@@ -16,6 +16,9 @@ parts/
 sdist/
 var/
 wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
@@ -33,6 +36,7 @@ venv.bak/
 # PyTorch
 *.pth
 *.pt
+checkpoints/
 *.onnx
 
 # Logs and checkpoints
@@ -60,6 +64,13 @@ datasets/
 .DS_Store
 Thumbs.db
 
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Cache
+.cache/
+*.log
 # Testing
 .pytest_cache/
 .coverage
