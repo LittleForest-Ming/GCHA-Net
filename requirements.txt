@@ -1,3 +1,5 @@
+torch>=1.9.0
+pytest>=7.0.0
 torch>=2.0.0
 torchvision>=0.15.0
 torchvision>=0.15.0
