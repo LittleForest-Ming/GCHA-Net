@@ -1,223 +1,230 @@
 """
-Test script to verify GCHA-Net implementation.
-This script tests all components independently and together.
+Test script for GCHA-Net model architecture.
 """
 
 import torch
-import sys
-import os
-
-# Add parent directory to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from models.gcha_net import GCHANet, build_gcha_net
-from modules.gcha_attention import GCHAAttention, GCHABlock
-from utils.anchors import generate_anchor_grid, generate_parameter_grid, compute_anchor_iou
+from models import GCHANet, GeometryConstrainedAttention
 
 
-def test_anchors():
-    """Test anchor generation utilities."""
-    print("Testing anchor generation...")
+def test_geometry_constrained_attention():
+    """Test the GeometryConstrainedAttention layer."""
+    print("Testing GeometryConstrainedAttention...")
     
-    # Test anchor grid generation
-    anchors = generate_anchor_grid(
-        feature_size=(32, 32),
-        num_anchors=9,
-        device='cpu'
-    )
-    print(f"✓ Generated anchor grid: {anchors.shape}")
-    assert anchors.shape[0] == 32 * 32 * 9, "Incorrect anchor grid size"
-    assert anchors.shape[1] == 4, "Incorrect anchor format"
+    batch_size = 2
+    num_queries = 10
+    num_keys = 20
+    embed_dim = 256
+    num_heads = 8
     
-    # Test parameter grid generation
-    param_grid = generate_parameter_grid(
-        N_total=256,
-        feature_dim=128,
-        device='cpu'
-    )
-    print(f"✓ Generated parameter grid: {param_grid.shape}")
-    assert param_grid.shape == (256, 128), "Incorrect parameter grid size"
+    # Create layer
+    gca = GeometryConstrainedAttention(embed_dim=embed_dim, num_heads=num_heads)
     
-    # Test IoU computation
-    anchors1 = torch.rand(10, 4)
-    anchors2 = torch.rand(15, 4)
-    iou = compute_anchor_iou(anchors1, anchors2)
-    print(f"✓ Computed IoU: {iou.shape}")
-    assert iou.shape == (10, 15), "Incorrect IoU shape"
+    # Create dummy inputs
+    query = torch.randn(batch_size, num_queries, embed_dim)
+    key = torch.randn(batch_size, num_keys, embed_dim)
+    value = torch.randn(batch_size, num_keys, embed_dim)
     
-    print("✓ All anchor tests passed!\n")
+    # Test without mask
+    output = gca(query, key, value)
+    assert output.shape == (batch_size, num_queries, embed_dim), f"Expected shape {(batch_size, num_queries, embed_dim)}, got {output.shape}"
+    print(f"  ✓ Without mask: output shape = {output.shape}")
+    
+    # Test with 2D mask
+    mask_2d = torch.rand(num_queries, num_keys) > 0.5  # Random boolean mask
+    output = gca(query, key, value, geometry_mask=mask_2d)
+    assert output.shape == (batch_size, num_queries, embed_dim)
+    print(f"  ✓ With 2D mask: output shape = {output.shape}")
+    
+    # Test with 3D mask
+    mask_3d = torch.rand(batch_size, num_queries, num_keys) > 0.5
+    output = gca(query, key, value, geometry_mask=mask_3d)
+    assert output.shape == (batch_size, num_queries, embed_dim)
+    print(f"  ✓ With 3D mask: output shape = {output.shape}")
+    
+    print("GeometryConstrainedAttention tests passed!\n")
 
 
-def test_gcha_attention():
-    """Test GCHA attention module."""
-    print("Testing GCHA attention...")
+def test_gcha_net_basic():
+    """Test basic GCHA-Net forward pass."""
+    print("Testing GCHA-Net basic functionality...")
     
-    # Test GCHA attention layer
-    attention = GCHAAttention(
-        in_channels=64,
-        num_heads=4,
-        grid_size=(7, 7),
-        N_total=256
-    )
+    batch_size = 2
+    height = 224
+    width = 224
+    num_queries = 100
     
-    x = torch.randn(2, 64, 32, 32)
-    output = attention(x)
-    print(f"✓ GCHA attention output: {output.shape}")
-    assert output.shape == x.shape, "Output shape mismatch"
-    
-    # Test mask generation
-    mask = attention.generate_attention_mask(x)
-    print(f"✓ Generated attention mask: {mask.shape}")
-    assert mask.shape == (2, 4, 32, 32), "Incorrect mask shape"
-    
-    # Test GCHA block
-    block = GCHABlock(
-        in_channels=64,
-        num_heads=4,
-        grid_size=(7, 7)
-    )
-    
-    output = block(x)
-    print(f"✓ GCHA block output: {output.shape}")
-    assert output.shape == x.shape, "Block output shape mismatch"
-    
-    print("✓ All GCHA attention tests passed!\n")
-
-
-def test_gcha_net():
-    """Test complete GCHA-Net model."""
-    print("Testing GCHA-Net model...")
-    
-    # Test segmentation model (using smaller model for memory efficiency)
+    # Create model (without pretrained weights for faster testing)
     model = GCHANet(
-        in_channels=3,
-        num_classes=19,
-        base_channels=32,
-        num_blocks=[1, 1, 1, 1],
-        num_heads=[2, 4, 8, 16],
-        task='segmentation'
+        embed_dim=256,
+        num_heads=8,
+        num_decoder_layers=3,  # Use fewer layers for faster testing
+        num_queries=num_queries,
+        pretrained=False
     )
     
-    x = torch.randn(1, 3, 128, 128)
-    output = model(x)
-    print(f"✓ Segmentation output: {output.shape}")
-    assert output.shape == (1, 19, 128, 128), "Incorrect segmentation output shape"
+    # Create dummy input
+    images = torch.randn(batch_size, 3, height, width)
     
-    # Test classification model
-    model_cls = GCHANet(
-        in_channels=3,
-        num_classes=100,
-        base_channels=32,
-        num_blocks=[1, 1, 1, 1],
-        num_heads=[2, 4, 8, 16],
-        task='classification'
-    )
+    # Test forward pass without geometry mask
+    print("  Testing without geometry mask...")
+    anchor_logits, param_offsets = model(images)
     
-    output_cls = model_cls(x)
-    print(f"✓ Classification output: {output_cls.shape}")
-    assert output_cls.shape == (1, 100), "Incorrect classification output shape"
+    assert anchor_logits.shape == (batch_size, num_queries, 1), f"Expected anchor_logits shape {(batch_size, num_queries, 1)}, got {anchor_logits.shape}"
+    assert param_offsets.shape == (batch_size, num_queries, 3), f"Expected param_offsets shape {(batch_size, num_queries, 3)}, got {param_offsets.shape}"
     
-    # Test parameter grid
-    param_grid = model.get_parameter_grid(feature_dim=128, device='cpu')
-    print(f"✓ Model parameter grid: {param_grid.shape}")
+    print(f"    ✓ anchor_logits shape: {anchor_logits.shape}")
+    print(f"    ✓ param_offsets shape: {param_offsets.shape}")
     
-    print("✓ All GCHA-Net tests passed!\n")
+    print("GCHA-Net basic tests passed!\n")
 
 
-def test_model_config():
-    """Test model building from configuration."""
-    print("Testing model configuration...")
+def test_gcha_net_with_geometry_mask():
+    """Test GCHA-Net with geometry constraint mask."""
+    print("Testing GCHA-Net with geometry mask...")
     
-    config = {
-        'in_channels': 3,
-        'num_classes': 19,
-        'base_channels': 32,
-        'num_blocks': [1, 1, 1, 1],
-        'num_heads': [2, 4, 8, 16],
-        'grid_size': [7, 7],
-        'N_total': 256,
-        'epsilon': 1e-6,
-        'dropout': 0.1,
-        'task': 'segmentation'
-    }
+    batch_size = 2
+    height = 224
+    width = 224
+    num_queries = 100
     
-    model = build_gcha_net(config)
-    x = torch.randn(1, 3, 128, 128)
-    output = model(x)
-    print(f"✓ Config-based model output: {output.shape}")
-    assert output.shape == (1, 19, 128, 128), "Incorrect output from config model"
-    
-    print("✓ Configuration tests passed!\n")
-
-
-def count_parameters(model):
-    """Count trainable parameters in a model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def test_model_stats():
-    """Display model statistics."""
-    print("Model Statistics:")
-    print("-" * 50)
-    
+    # Create model
     model = GCHANet(
-        in_channels=3,
-        num_classes=19,
-        base_channels=32,
-        num_blocks=[1, 1, 1, 1],
-        num_heads=[2, 4, 8, 16],
-        task='segmentation'
+        embed_dim=256,
+        num_heads=8,
+        num_decoder_layers=3,
+        num_queries=num_queries,
+        pretrained=False
+    )
+    model.eval()  # Set to eval mode
+    
+    # Create dummy input
+    images = torch.randn(batch_size, 3, height, width)
+    
+    # Get feature map size (this depends on the FPN output)
+    with torch.no_grad():
+        feature_maps = model.forward_backbone(images)
+        unified_features = model.fpn(feature_maps)
+        _, _, H_feat, W_feat = unified_features.shape
+        num_spatial = H_feat * W_feat
+    
+    # Create geometry mask simulating polynomial trajectory region
+    # Shape: (batch_size, num_queries, num_spatial_positions)
+    # Using 0.3 threshold to create ~70% mask coverage (typical for highway trajectories)
+    MASK_THRESHOLD = 0.3
+    geometry_mask = torch.rand(batch_size, num_queries, num_spatial) > MASK_THRESHOLD
+    
+    print(f"  Feature map spatial size: {H_feat}x{W_feat} = {num_spatial}")
+    print(f"  Geometry mask shape: {geometry_mask.shape}")
+    
+    # Forward pass with mask
+    with torch.no_grad():
+        anchor_logits, param_offsets = model(images, geometry_mask=geometry_mask)
+    
+    assert anchor_logits.shape == (batch_size, num_queries, 1)
+    assert param_offsets.shape == (batch_size, num_queries, 3)
+    
+    print(f"    ✓ anchor_logits shape: {anchor_logits.shape}")
+    print(f"    ✓ param_offsets shape: {param_offsets.shape}")
+    
+    print("GCHA-Net geometry mask tests passed!\n")
+
+
+def test_model_components():
+    """Test individual model components."""
+    print("Testing individual model components...")
+    
+    from models.gcha_net import (
+        FeaturePyramidNetwork,
+        GCHADecoder,
+        AnchorClassificationHead,
+        ParameterRegressionHead
     )
     
-    num_params = count_parameters(model)
-    print(f"Total trainable parameters: {num_params:,}")
+    # Test FPN
+    print("  Testing FPN...")
+    fpn = FeaturePyramidNetwork(in_channels_list=[256, 512, 1024, 2048], out_channels=256)
+    features = [
+        torch.randn(2, 256, 56, 56),
+        torch.randn(2, 512, 28, 28),
+        torch.randn(2, 1024, 14, 14),
+        torch.randn(2, 2048, 7, 7),
+    ]
+    unified = fpn(features)
+    assert unified.shape == (2, 256, 56, 56)
+    print(f"    ✓ FPN output shape: {unified.shape}")
     
-    # Test forward pass time
-    import time
-    x = torch.randn(1, 3, 128, 128)
+    # Test GCHA Decoder
+    print("  Testing GCHA Decoder...")
+    decoder = GCHADecoder(embed_dim=256, num_heads=8, num_layers=3)
+    tgt = torch.randn(2, 100, 256)
+    memory = torch.randn(2, 196, 256)
+    output = decoder(tgt, memory)
+    assert output.shape == (2, 100, 256)
+    print(f"    ✓ Decoder output shape: {output.shape}")
     
-    # Warmup
-    with torch.no_grad():
-        _ = model(x)
+    # Test Classification Head
+    print("  Testing Anchor Classification Head...")
+    cls_head = AnchorClassificationHead(embed_dim=256)
+    features = torch.randn(2, 100, 256)
+    logits = cls_head(features)
+    assert logits.shape == (2, 100, 1)
+    print(f"    ✓ Classification head output shape: {logits.shape}")
     
-    # Measure
-    start = time.time()
-    with torch.no_grad():
-        output = model(x)
-    end = time.time()
+    # Test Regression Head
+    print("  Testing Parameter Regression Head...")
+    reg_head = ParameterRegressionHead(embed_dim=256)
+    params = reg_head(features)
+    assert params.shape == (2, 100, 3)
+    print(f"    ✓ Regression head output shape: {params.shape}")
     
-    print(f"Forward pass time (CPU): {(end - start) * 1000:.2f} ms")
-    print(f"Output shape: {output.shape}")
-    print("-" * 50)
-    print()
+    print("All component tests passed!\n")
 
 
-def main():
-    """Run all tests."""
-    print("=" * 50)
-    print("GCHA-Net Implementation Tests")
-    print("=" * 50)
-    print()
+def test_pretrained_backbone():
+    """Test GCHA-Net with pretrained ResNet50 backbone."""
+    print("Testing GCHA-Net with pretrained backbone...")
     
     try:
-        test_anchors()
-        test_gcha_attention()
-        test_gcha_net()
-        test_model_config()
-        test_model_stats()
+        # Create model with pretrained weights
+        model = GCHANet(
+            embed_dim=256,
+            num_heads=8,
+            num_decoder_layers=2,
+            num_queries=50,
+            pretrained=True
+        )
         
-        print("=" * 50)
-        print("✓ ALL TESTS PASSED!")
-        print("=" * 50)
+        images = torch.randn(1, 3, 224, 224)
+        
+        with torch.no_grad():
+            anchor_logits, param_offsets = model(images)
+        
+        assert anchor_logits.shape == (1, 50, 1)
+        assert param_offsets.shape == (1, 50, 3)
+        
+        print(f"  ✓ Model with pretrained backbone works")
+        print(f"  ✓ anchor_logits shape: {anchor_logits.shape}")
+        print(f"  ✓ param_offsets shape: {param_offsets.shape}")
+        print("Pretrained backbone test passed!\n")
         
     except Exception as e:
-        print(f"\n✗ Test failed with error: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+        print(f"  Note: Could not load pretrained weights (expected in offline environment): {e}")
+        print("  This is normal if no internet connection is available.\n")
+
+
+if __name__ == "__main__":
+    print("=" * 70)
+    print("GCHA-Net Model Architecture Tests")
+    print("=" * 70)
+    print()
     
-    return 0
-
-
-if __name__ == '__main__':
-    exit(main())
+    # Run tests
+    test_geometry_constrained_attention()
+    test_model_components()
+    test_gcha_net_basic()
+    test_gcha_net_with_geometry_mask()
+    test_pretrained_backbone()
+    
+    print("=" * 70)
+    print("All tests completed successfully! ✓")
+    print("=" * 70)

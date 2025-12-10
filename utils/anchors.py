@@ -1,154 +1,156 @@
 """
 Anchor generation utilities for GCHA-Net.
-This module provides functions for generating the parameter grid A (anchors).
+
+This module provides functions for generating the parameter grid A (anchors)
+used in the GCHA attention mechanism.
 """
 
 import torch
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 
 def generate_anchor_grid(
+    n_total: int,
     feature_size: Tuple[int, int],
-    num_anchors: int = 9,
-    scales: List[float] = None,
-    aspect_ratios: List[float] = None,
-    device: str = 'cuda'
+    device: torch.device = torch.device('cpu')
 ) -> torch.Tensor:
     """
-    Generate anchor grid for spatial attention.
+    Generate anchor parameter grid A for GCHA attention.
     
     Args:
-        feature_size: (H, W) size of the feature map
-        num_anchors: Number of anchors per location
-        scales: List of anchor scales (default: [0.5, 1.0, 2.0])
-        aspect_ratios: List of aspect ratios (default: [0.5, 1.0, 2.0])
-        device: Device to place anchors on
+        n_total: Total number of anchors to generate
+        feature_size: Size of the feature map (H, W)
+        device: Device to place the anchors on
         
     Returns:
-        anchors: Tensor of shape (H*W*num_anchors, 4) with (cx, cy, w, h) format
+        torch.Tensor: Anchor grid of shape (n_total, 2) containing (y, x) coordinates
     """
-    if scales is None:
-        scales = [0.5, 1.0, 2.0]
-    if aspect_ratios is None:
-        aspect_ratios = [0.5, 1.0, 2.0]
-    
     H, W = feature_size
     
-    # Generate base anchors
-    base_anchors = []
-    for scale in scales:
-        for ratio in aspect_ratios:
-            w = scale * np.sqrt(ratio)
-            h = scale / np.sqrt(ratio)
-            base_anchors.append([0, 0, w, h])
+    # Generate uniform grid of anchors across the feature map
+    n_h = int(np.sqrt(n_total * H / W))
+    n_w = int(n_total / n_h)
     
-    base_anchors = torch.tensor(base_anchors, dtype=torch.float32, device=device)
+    # Adjust to get exactly n_total anchors
+    while n_h * n_w < n_total:
+        if n_h < n_w:
+            n_h += 1
+        else:
+            n_w += 1
     
-    # Generate grid centers
-    shift_x = torch.arange(0, W, dtype=torch.float32, device=device) / W
-    shift_y = torch.arange(0, H, dtype=torch.float32, device=device) / H
-    shift_y, shift_x = torch.meshgrid(shift_y, shift_x, indexing='ij')
-    shifts = torch.stack([shift_x.flatten(), shift_y.flatten()], dim=1)
+    # Generate grid coordinates
+    y_coords = torch.linspace(0, H - 1, n_h, device=device)
+    x_coords = torch.linspace(0, W - 1, n_w, device=device)
     
-    # Combine shifts with base anchors
-    anchors = []
-    for shift in shifts:
-        for base_anchor in base_anchors:
-            cx, cy = shift[0], shift[1]
-            w, h = base_anchor[2], base_anchor[3]
-            anchors.append([cx, cy, w, h])
+    # Create meshgrid
+    yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
     
-    # Create tensor directly from list for efficiency
-    anchors = torch.tensor(anchors, dtype=torch.float32, device=device)
+    # Flatten and combine
+    anchors = torch.stack([yy.flatten(), xx.flatten()], dim=1)
+    
+    # Take exactly n_total anchors
+    anchors = anchors[:n_total]
+    
     return anchors
 
 
-def generate_parameter_grid(
-    N_total: int,
-    feature_dim: int,
-    grid_size: Tuple[int, int] = (7, 7),
-    epsilon: float = 1e-6,
-    device: str = 'cuda'
+def generate_hierarchical_anchors(
+    n_total: int,
+    feature_sizes: List[Tuple[int, int]],
+    device: torch.device = torch.device('cpu')
+) -> List[torch.Tensor]:
+    """
+    Generate hierarchical anchor grids for multi-scale features.
+    
+    Args:
+        n_total: Total number of anchors per level
+        feature_sizes: List of feature map sizes [(H1, W1), (H2, W2), ...]
+        device: Device to place the anchors on
+        
+    Returns:
+        List[torch.Tensor]: List of anchor grids, one per feature level
+    """
+    anchor_grids = []
+    
+    for feature_size in feature_sizes:
+        anchors = generate_anchor_grid(n_total, feature_size, device)
+        anchor_grids.append(anchors)
+    
+    return anchor_grids
+
+
+def compute_anchor_distances(
+    query_positions: torch.Tensor,
+    anchor_positions: torch.Tensor,
+    epsilon: float = 1e-6
 ) -> torch.Tensor:
     """
-    Generate parameter grid A for GCHA attention.
-    
-    The parameter grid can be organized spatially according to grid_size,
-    which helps in establishing spatial correspondence in attention computation.
+    Compute distances between query positions and anchor positions.
     
     Args:
-        N_total: Total number of attention parameters
-        feature_dim: Dimension of input features
-        grid_size: Spatial grid size for parameter distribution (used for organization)
+        query_positions: Query positions of shape (N, 2) or (B, N, 2)
+        anchor_positions: Anchor positions of shape (M, 2) or (B, M, 2)
         epsilon: Small value for numerical stability
-        device: Device to place parameters on
         
     Returns:
-        param_grid: Parameter tensor of shape (N_total, feature_dim)
+        torch.Tensor: Distance matrix of shape (N, M) or (B, N, M)
     """
-    # Initialize parameter grid with Xavier uniform initialization
-    param_grid = torch.empty(N_total, feature_dim, device=device)
-    torch.nn.init.xavier_uniform_(param_grid)
+    if query_positions.dim() == 2:
+        # (N, 2) -> (N, 1, 2)
+        query_positions = query_positions.unsqueeze(1)
+        # (M, 2) -> (1, M, 2)
+        anchor_positions = anchor_positions.unsqueeze(0)
+    elif query_positions.dim() == 3:
+        # (B, N, 2) -> (B, N, 1, 2)
+        query_positions = query_positions.unsqueeze(2)
+        # (B, M, 2) -> (B, 1, M, 2)
+        anchor_positions = anchor_positions.unsqueeze(1)
     
-    # Add small epsilon for numerical stability
-    param_grid = param_grid + epsilon * torch.randn_like(param_grid)
+    # Compute Euclidean distance
+    distances = torch.norm(query_positions - anchor_positions, dim=-1, p=2)
+    distances = distances + epsilon  # Add epsilon for stability
     
-    # If grid_size is specified and aligns with N_total, apply spatial structure
-    # This helps create spatial coherence in the parameter grid
-    grid_h, grid_w = grid_size
-    if grid_h * grid_w <= N_total and N_total % (grid_h * grid_w) == 0:
-        # Reshape to add spatial structure, then flatten back
-        # This groups parameters by spatial location
-        num_grids = N_total // (grid_h * grid_w)
-        param_grid = param_grid.view(num_grids, grid_h, grid_w, feature_dim)
-        # Apply position encoding to add spatial awareness
-        for i in range(grid_h):
-            for j in range(grid_w):
-                # Add subtle position encoding
-                position_encoding = torch.tensor([i / grid_h, j / grid_w], device=device)
-                param_grid[:, i, j, :2] += position_encoding * 0.01
-        param_grid = param_grid.view(N_total, feature_dim)
-    
-    return param_grid
+    return distances
 
 
-def compute_anchor_iou(anchors1: torch.Tensor, anchors2: torch.Tensor) -> torch.Tensor:
+def get_position_encoding(
+    positions: torch.Tensor,
+    d_model: int,
+    temperature: float = 10000.0
+) -> torch.Tensor:
     """
-    Compute IoU between two sets of anchors.
+    Generate sinusoidal position encodings for 2D positions.
     
     Args:
-        anchors1: Tensor of shape (N, 4) with (cx, cy, w, h)
-        anchors2: Tensor of shape (M, 4) with (cx, cy, w, h)
+        positions: Position coordinates of shape (..., 2)
+        d_model: Dimension of the encoding (should be even)
+        temperature: Temperature for the sinusoidal encoding
         
     Returns:
-        iou: Tensor of shape (N, M) with IoU values
+        torch.Tensor: Position encodings of shape (..., d_model)
     """
-    # Convert from (cx, cy, w, h) to (x1, y1, x2, y2)
-    def convert_to_corners(anchors):
-        cx, cy, w, h = anchors[:, 0], anchors[:, 1], anchors[:, 2], anchors[:, 3]
-        x1 = cx - w / 2
-        y1 = cy - h / 2
-        x2 = cx + w / 2
-        y2 = cy + h / 2
-        return torch.stack([x1, y1, x2, y2], dim=1)
+    assert d_model % 2 == 0, "d_model must be even for 2D position encoding"
     
-    boxes1 = convert_to_corners(anchors1)
-    boxes2 = convert_to_corners(anchors2)
+    d_half = d_model // 2
+    div_term = torch.exp(
+        torch.arange(0, d_half, 2, dtype=torch.float32, device=positions.device)
+        * -(torch.log(torch.tensor(temperature, device=positions.device)) / d_half)
+    )
     
-    # Compute intersection
-    x1_max = torch.max(boxes1[:, None, 0], boxes2[:, 0])
-    y1_max = torch.max(boxes1[:, None, 1], boxes2[:, 1])
-    x2_min = torch.min(boxes1[:, None, 2], boxes2[:, 2])
-    y2_min = torch.min(boxes1[:, None, 3], boxes2[:, 3])
+    # Split into y and x encodings
+    y_pos = positions[..., 0:1]  # (..., 1)
+    x_pos = positions[..., 1:2]  # (..., 1)
     
-    intersection = torch.clamp(x2_min - x1_max, min=0) * torch.clamp(y2_min - y1_max, min=0)
+    # Generate encodings
+    y_enc_sin = torch.sin(y_pos * div_term)
+    y_enc_cos = torch.cos(y_pos * div_term)
+    x_enc_sin = torch.sin(x_pos * div_term)
+    x_enc_cos = torch.cos(x_pos * div_term)
     
-    # Compute union
-    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
-    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
-    union = area1[:, None] + area2 - intersection
+    # Interleave y and x encodings
+    pos_enc = torch.cat([
+        y_enc_sin, y_enc_cos, x_enc_sin, x_enc_cos
+    ], dim=-1)
     
-    # Compute IoU
-    iou = intersection / (union + 1e-6)
-    return iou
+    return pos_enc
