@@ -25,6 +25,37 @@ venv/
 env/
 ENV/
 .venv
+ENV/
+env/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
+*.onnx
+
+# Logs and checkpoints
+logs/
+checkpoints/
+lightning_logs/
+*.log
+
+# Data
+data/
+datasets/
 
 # IDE
 .vscode/
@@ -33,6 +64,21 @@ ENV/
 *.swo
 *~
 
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Cache
+.cache/
+*.log
 # Testing
 .pytest_cache/
 .coverage
@@ -51,3 +97,6 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+# TensorBoard
+runs/
+events.out.tfevents.*
