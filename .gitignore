@@ -19,11 +19,35 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
 
 # PyTorch
 *.pth
 *.pt
 checkpoints/
+*.onnx
+
+# Logs and checkpoints
+logs/
+checkpoints/
+lightning_logs/
+*.log
+
+# Data
+data/
+datasets/
 
 # IDE
 .vscode/
@@ -31,6 +55,10 @@ checkpoints/
 *.swp
 *.swo
 *~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
 
 # OS
 .DS_Store
@@ -43,3 +71,11 @@ Thumbs.db
 # Cache
 .cache/
 *.log
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# TensorBoard
+runs/
+events.out.tfevents.*
