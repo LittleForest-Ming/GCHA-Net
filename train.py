@@ -177,7 +177,7 @@ class GCHANetLightning(pl.LightningModule):
         """
         batch_size = lane_params.shape[0]
         max_lanes = lane_params.shape[1]
-        num_anchors = self.anchors.shape[0]
+        num_anchors = self.model.anchors.shape[0]
         
         cls_targets = torch.zeros(batch_size, num_anchors)
         reg_targets = torch.zeros(batch_size, num_anchors, 3)
