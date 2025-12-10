@@ -19,6 +19,11 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
@@ -76,6 +81,13 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
 # TensorBoard
 runs/
 events.out.tfevents.*
