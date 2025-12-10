@@ -245,7 +245,7 @@ class GCHANet(nn.Module):
             f"Number of anchors mismatch: {self.anchors.shape[0]} vs {num_anchors}"
         
         # Backbone: ResNet50 with FPN
-        self.backbone = self._initialize_backbone()
+        self._initialize_backbone()
         
         # Feature projection to embed_dim
         self.feature_proj = nn.Conv2d(256, embed_dim, kernel_size=1)

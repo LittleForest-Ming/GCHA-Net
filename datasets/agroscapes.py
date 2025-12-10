@@ -216,9 +216,9 @@ class DummyDataset(Dataset):
         
         for i in range(num_lanes):
             # Random polynomial parameters
-            k = torch.randn(1) * 0.1
-            m = torch.randn(1) * 0.3
-            b = torch.rand(1) * 0.5 + 0.25
+            k = torch.randn(1).item() * 0.1
+            m = torch.randn(1).item() * 0.3
+            b = torch.rand(1).item() * 0.5 + 0.25
             lane_params[i] = torch.tensor([k, m, b])
             lane_valid[i] = True
         
