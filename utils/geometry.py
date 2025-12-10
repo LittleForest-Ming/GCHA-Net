@@ -90,10 +90,11 @@ def generate_geometric_mask(H, W, anchors, epsilon=0.05):
     distance = torch.abs(x_tilde - x_poly)  # [N, H, W]
     
     # Create mask: 0 if within epsilon, -inf otherwise
+    # Using scalar values for efficiency
     masks = torch.where(
         distance < epsilon,
-        torch.zeros_like(distance),
-        torch.full_like(distance, float('-inf'))
+        torch.tensor(0.0, dtype=distance.dtype, device=device),
+        torch.tensor(float('-inf'), dtype=distance.dtype, device=device)
     )
     
     return masks

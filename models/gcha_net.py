@@ -352,6 +352,7 @@ class GCHANet(nn.Module):
         features_flat = features.flatten(2).transpose(1, 2)
         
         # Generate geometric masks
+        # Note: For fixed input dimensions, these could be cached to improve performance
         geometric_masks = generate_geometric_mask(
             H_feat, W_feat, self.anchors, self.epsilon
         )  # [num_anchors, H', W']

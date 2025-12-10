@@ -105,9 +105,6 @@ class GCHANetLightning(pl.LightningModule):
         # Matching threshold for anchor assignment
         self.matching_threshold = config.get('matching_threshold', 0.3)
         
-        # Anchors for matching
-        self.anchors = generate_anchors()
-        
     def forward(self, x):
         """Forward pass."""
         return self.model(x)
@@ -186,12 +183,8 @@ class GCHANetLightning(pl.LightningModule):
         reg_targets = torch.zeros(batch_size, num_anchors, 3)
         reg_mask = torch.zeros(batch_size, num_anchors, dtype=torch.bool)
         
-        # Move anchors to the same device as lane_params for efficient computation
-        anchors_device = self.anchors.to(lane_params.device)
-        
-        # Expand anchors for batch
-        anchors_expanded = anchors_device.unsqueeze(0).unsqueeze(0)
-        # [1, 1, num_anchors, 3]
+        # Use model's anchors and move to the same device as lane_params
+        anchors_device = self.model.anchors.to(lane_params.device)
         
         for i in range(batch_size):
             valid_lanes = lane_valid[i]
