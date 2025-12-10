@@ -1,1 +1,1 @@
-"""Utilities for GCHA-Net."""
+"""Utility modules for GCHA-Net."""

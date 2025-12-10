@@ -1,32 +1,114 @@
-"""GCHA-Net: Geometry-Constrained Hierarchical Attention Network for Lane Detection.
+"""
+GCHA-Net: Geometry-Constrained Highway Attention Network
 
 This module implements the GCHA-Net architecture with:
-- ResNet50 + FPN backbone
-- Geometry-Constrained Attention decoder
-- Classification and regression heads
+- ResNet50 backbone with Feature Pyramid Network (FPN)
+- Geometry-Constrained Attention mechanism
+- Dual-head architecture for anchor classification and parameter regression
+GCHA-Net: Guided Cross-Hierarchical Attention Network.
+
+Main model definition integrating all components including GCHA attention,
+anchor generation, and hierarchical feature processing.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.ops import FeaturePyramidNetwork
+from typing import Optional, Tuple
 
-from utils.geometry import generate_anchors, generate_geometric_mask
+
+class FeaturePyramidNetwork(nn.Module):
+    """
+    Feature Pyramid Network (FPN) that takes multi-scale features from ResNet
+    and produces a unified feature map.
+    """
+    
+    def __init__(self, in_channels_list=None, out_channels=256):
+        """
+        Args:
+            in_channels_list: List of channels from ResNet stages (C2, C3, C4, C5)
+            out_channels: Output channels for unified feature map
+        """
+        super().__init__()
+        if in_channels_list is None:
+            in_channels_list = [256, 512, 1024, 2048]
+        self.out_channels = out_channels
+        
+        # Lateral connections (1x1 convolutions to reduce channels)
+        self.lateral_convs = nn.ModuleList([
+            nn.Conv2d(in_channels, out_channels, kernel_size=1)
+            for in_channels in in_channels_list
+        ])
+        
+        # Output convolutions (3x3 convolutions after upsampling and addition)
+        self.output_convs = nn.ModuleList([
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+            for _ in in_channels_list
+        ])
+        
+        # Final fusion layer to merge FPN outputs into unified feature map
+        self.fusion_conv = nn.Conv2d(
+            out_channels * len(in_channels_list), 
+            out_channels, 
+            kernel_size=1
+        )
+        
+    def forward(self, features):
+        """
+        Args:
+            features: List of feature maps from ResNet [C2, C3, C4, C5]
+        
+        Returns:
+            Unified feature map of shape (B, out_channels, H, W)
+        """
+        # Build lateral connections
+        laterals = [
+            lateral_conv(features[i])
+            for i, lateral_conv in enumerate(self.lateral_convs)
+        ]
+        
+        # Top-down pathway with lateral connections
+        for i in range(len(laterals) - 1, 0, -1):
+            laterals[i - 1] = laterals[i - 1] + F.interpolate(
+                laterals[i], 
+                size=laterals[i - 1].shape[-2:],
+                mode='bilinear',
+                align_corners=False
+            )
+        
+        # Apply output convolutions
+        fpn_features = [
+            output_conv(laterals[i])
+            for i, output_conv in enumerate(self.output_convs)
+        ]
+        
+        # Resize all FPN outputs to the same size (using the largest resolution)
+        target_size = fpn_features[0].shape[-2:]
+        resized_features = [fpn_features[0]]
+        for feat in fpn_features[1:]:
+            resized_features.append(
+                F.interpolate(feat, size=target_size, mode='bilinear', align_corners=False)
+            )
+        
+        # Concatenate and fuse
+        concatenated = torch.cat(resized_features, dim=1)
+        unified_features = self.fusion_conv(concatenated)
+        
+        return unified_features
 
 
 class GeometryConstrainedAttention(nn.Module):
-    """Geometry-Constrained Attention layer.
-    
-    This replaces standard cross-attention with a geometric constraint that
-    prevents attention to pixels outside polynomial trajectories.
+    """
+    Geometry-Constrained Attention layer that replaces standard cross-attention.
+    Uses a static boolean mask M_geo to prevent attention to pixels outside
+    a polynomial trajectory region.
     """
     
     def __init__(self, embed_dim=256, num_heads=8, dropout=0.1):
-        """Initialize the GeometryConstrainedAttention layer.
-        
+        """
         Args:
-            embed_dim: Dimension of input features
+            embed_dim: Embedding dimension for attention
             num_heads: Number of attention heads
             dropout: Dropout probability
         """
@@ -34,9 +116,9 @@ class GeometryConstrainedAttention(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
+        assert self.head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
         
-        assert self.head_dim * num_heads == embed_dim, \
-            "embed_dim must be divisible by num_heads"
+        self.scale = self.head_dim ** -0.5
         
         # Query, Key, Value projections
         self.q_proj = nn.Linear(embed_dim, embed_dim)
@@ -47,78 +129,83 @@ class GeometryConstrainedAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         
         self.dropout = nn.Dropout(dropout)
-        self.scale = self.head_dim ** -0.5
         
-    def forward(self, query, key, value, geometric_mask=None):
-        """Forward pass with geometric masking.
+    def forward(self, query, key, value, geometry_mask: Optional[torch.Tensor] = None):
+        """
+        Forward pass with geometry-constrained attention.
         
         Args:
-            query: Tensor of shape (N, num_queries, embed_dim)
-            key: Tensor of shape (N, H*W, embed_dim) - spatial features
-            value: Tensor of shape (N, H*W, embed_dim) - spatial features
-            geometric_mask: Optional tensor of shape (num_queries, H*W)
-                           with 0 for valid positions, -inf for masked
-                           
+            query: Query tensor of shape (B, N_q, embed_dim)
+            key: Key tensor of shape (B, N_k, embed_dim)
+            value: Value tensor of shape (B, N_k, embed_dim)
+            geometry_mask: Boolean mask M_geo of shape (B, N_q, N_k) or (N_q, N_k)
+                          True indicates positions to KEEP, False indicates positions to MASK
+        
         Returns:
-            output: Tensor of shape (N, num_queries, embed_dim)
+            Output tensor of shape (B, N_q, embed_dim)
         """
-        N, num_queries, _ = query.shape
-        _, seq_len, _ = key.shape
+        B, N_q, _ = query.shape
+        N_k = key.shape[1]
         
-        # Project and reshape for multi-head attention
-        q = self.q_proj(query)  # [N, num_queries, embed_dim]
-        k = self.k_proj(key)    # [N, seq_len, embed_dim]
-        v = self.v_proj(value)  # [N, seq_len, embed_dim]
+        # Project Q, K, V
+        Q = self.q_proj(query)  # (B, N_q, embed_dim)
+        K = self.k_proj(key)     # (B, N_k, embed_dim)
+        V = self.v_proj(value)   # (B, N_k, embed_dim)
         
-        # Reshape to [N, num_heads, num_queries/seq_len, head_dim]
-        q = q.view(N, num_queries, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(N, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        v = v.view(N, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        # Reshape for multi-head attention
+        Q = Q.reshape(B, N_q, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, N_q, head_dim)
+        K = K.reshape(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, N_k, head_dim)
+        V = V.reshape(B, N_k, self.num_heads, self.head_dim).transpose(1, 2)  # (B, num_heads, N_k, head_dim)
         
         # Compute attention scores
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        # [N, num_heads, num_queries, seq_len]
+        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale  # (B, num_heads, N_q, N_k)
         
-        # Apply geometric mask if provided
-        if geometric_mask is not None:
-            # geometric_mask shape: [num_queries, seq_len]
-            # Expand for batch and heads: [1, 1, num_queries, seq_len]
-            mask_expanded = geometric_mask.unsqueeze(0).unsqueeze(0)
-            attn = attn + mask_expanded
+        # Apply geometry mask if provided
+        if geometry_mask is not None:
+            # Ensure mask is on the same device
+            geometry_mask = geometry_mask.to(attn_scores.device)
+            
+            # Handle 2D mask (N_q, N_k) or 3D mask (B, N_q, N_k)
+            if geometry_mask.dim() == 2:
+                geometry_mask = geometry_mask.unsqueeze(0).unsqueeze(0)  # (1, 1, N_q, N_k)
+            elif geometry_mask.dim() == 3:
+                geometry_mask = geometry_mask.unsqueeze(1)  # (B, 1, N_q, N_k)
+            
+            # Apply mask: set masked positions to large negative value
+            # geometry_mask: True = keep, False = mask out
+            attn_scores = attn_scores.masked_fill(~geometry_mask, float('-inf'))
         
-        # Apply softmax
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
+        # Softmax to get attention weights
+        attn_weights = F.softmax(attn_scores, dim=-1)  # (B, num_heads, N_q, N_k)
+        attn_weights = self.dropout(attn_weights)
         
         # Apply attention to values
-        out = torch.matmul(attn, v)  # [N, num_heads, num_queries, head_dim]
+        attn_output = torch.matmul(attn_weights, V)  # (B, num_heads, N_q, head_dim)
         
-        # Reshape back
-        out = out.transpose(1, 2).contiguous().view(N, num_queries, self.embed_dim)
+        # Reshape and project output
+        attn_output = attn_output.transpose(1, 2).reshape(B, N_q, self.embed_dim)
+        output = self.out_proj(attn_output)
         
-        # Output projection
-        out = self.out_proj(out)
-        
-        return out
+        return output
 
 
 class GCHADecoder(nn.Module):
-    """GCHA Decoder with Geometry-Constrained Attention."""
+    """
+    GCHA Decoder that uses Geometry-Constrained Attention layers.
+    """
     
-    def __init__(self, embed_dim=256, num_heads=8, num_layers=3, dropout=0.1):
-        """Initialize the GCHA Decoder.
-        
+    def __init__(self, embed_dim=256, num_heads=8, num_layers=6, dropout=0.1):
+        """
         Args:
-            embed_dim: Dimension of features
+            embed_dim: Embedding dimension
             num_heads: Number of attention heads
             num_layers: Number of decoder layers
             dropout: Dropout probability
         """
         super().__init__()
         self.embed_dim = embed_dim
-        self.num_layers = num_layers
         
-        # Decoder layers
+        # Stack of GCHA layers
         self.layers = nn.ModuleList([
             GCHADecoderLayer(embed_dim, num_heads, dropout)
             for _ in range(num_layers)
@@ -126,21 +213,20 @@ class GCHADecoder(nn.Module):
         
         self.norm = nn.LayerNorm(embed_dim)
         
-    def forward(self, queries, features, geometric_masks=None):
-        """Forward pass through the decoder.
-        
-        Args:
-            queries: Tensor of shape (N, num_queries, embed_dim) - anchor queries
-            features: Tensor of shape (N, H*W, embed_dim) - spatial features
-            geometric_masks: Optional tensor of shape (num_queries, H*W)
-            
-        Returns:
-            output: Tensor of shape (N, num_queries, embed_dim)
+    def forward(self, tgt, memory, geometry_mask: Optional[torch.Tensor] = None):
         """
-        output = queries
+        Args:
+            tgt: Target embeddings (B, N_tgt, embed_dim)
+            memory: Memory from encoder (B, N_mem, embed_dim)
+            geometry_mask: Geometry constraint mask (B, N_tgt, N_mem) or (N_tgt, N_mem)
+        
+        Returns:
+            Decoded features (B, N_tgt, embed_dim)
+        """
+        output = tgt
         
         for layer in self.layers:
-            output = layer(output, features, geometric_masks)
+            output = layer(output, memory, geometry_mask)
         
         output = self.norm(output)
         
@@ -148,244 +234,596 @@ class GCHADecoder(nn.Module):
 
 
 class GCHADecoderLayer(nn.Module):
-    """Single GCHA Decoder Layer."""
+    """
+    Single GCHA Decoder layer with self-attention and geometry-constrained cross-attention.
+    """
     
-    def __init__(self, embed_dim=256, num_heads=8, dropout=0.1, dim_feedforward=1024):
-        """Initialize a decoder layer.
-        
+    def __init__(self, embed_dim=256, num_heads=8, dropout=0.1, ffn_dim=2048):
+        """
         Args:
-            embed_dim: Dimension of features
+            embed_dim: Embedding dimension
             num_heads: Number of attention heads
             dropout: Dropout probability
-            dim_feedforward: Dimension of feedforward network
+            ffn_dim: Feed-forward network hidden dimension
         """
         super().__init__()
         
         # Self-attention
         self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
         
-        # Cross-attention with geometric constraint
+        # Geometry-constrained cross-attention
         self.cross_attn = GeometryConstrainedAttention(embed_dim, num_heads, dropout)
         
-        # Feedforward network
+        # Feed-forward network
         self.ffn = nn.Sequential(
-            nn.Linear(embed_dim, dim_feedforward),
+            nn.Linear(embed_dim, ffn_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(dim_feedforward, embed_dim),
+            nn.Linear(ffn_dim, embed_dim),
             nn.Dropout(dropout)
         )
         
-        # Layer norms
+        # Layer normalization
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.norm3 = nn.LayerNorm(embed_dim)
         
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, queries, features, geometric_mask=None):
-        """Forward pass through decoder layer.
-        
+    def forward(self, tgt, memory, geometry_mask: Optional[torch.Tensor] = None):
+        """
         Args:
-            queries: Tensor of shape (N, num_queries, embed_dim)
-            features: Tensor of shape (N, H*W, embed_dim)
-            geometric_mask: Optional tensor of shape (num_queries, H*W)
-            
+            tgt: Target embeddings (B, N_tgt, embed_dim)
+            memory: Memory from encoder (B, N_mem, embed_dim)
+            geometry_mask: Geometry constraint mask
+        
         Returns:
-            output: Tensor of shape (N, num_queries, embed_dim)
+            Updated target embeddings (B, N_tgt, embed_dim)
         """
         # Self-attention
-        q2, _ = self.self_attn(queries, queries, queries)
-        queries = queries + self.dropout(q2)
-        queries = self.norm1(queries)
+        tgt2, _ = self.self_attn(tgt, tgt, tgt)
+        tgt = tgt + self.dropout(tgt2)
+        tgt = self.norm1(tgt)
         
-        # Cross-attention with geometric constraint
-        q2 = self.cross_attn(queries, features, features, geometric_mask)
-        queries = queries + self.dropout(q2)
-        queries = self.norm2(queries)
+        # Geometry-constrained cross-attention
+        tgt2 = self.cross_attn(tgt, memory, memory, geometry_mask)
+        tgt = tgt + self.dropout(tgt2)
+        tgt = self.norm2(tgt)
         
-        # Feedforward
-        q2 = self.ffn(queries)
-        queries = queries + q2
-        queries = self.norm3(queries)
+        # Feed-forward
+        tgt2 = self.ffn(tgt)
+        tgt = tgt + tgt2
+        tgt = self.norm3(tgt)
         
-        return queries
+        return tgt
 
 
-class GCHANet(nn.Module):
-    """GCHA-Net: Geometry-Constrained Hierarchical Attention Network.
-    
-    Architecture:
-    - Backbone: ResNet50 + FPN
-    - Decoder: GCHA Decoder with geometric constraints
-    - Heads: Classification and regression MLPs
+class AnchorClassificationHead(nn.Module):
+    """
+    MLP head for binary anchor classification.
     """
     
-    def __init__(self, num_anchors=405, embed_dim=256, num_decoder_layers=3,
-                 num_heads=8, dropout=0.1, epsilon=0.05):
-        """Initialize GCHA-Net.
-        
+    def __init__(self, embed_dim=256, hidden_dim=512, num_layers=3):
+        """
         Args:
-            num_anchors: Number of anchor polynomials (default: 5*9*9=405)
-            embed_dim: Dimension of feature embeddings
-            num_decoder_layers: Number of decoder layers
-            num_heads: Number of attention heads
-            dropout: Dropout probability
-            epsilon: Distance threshold for geometric masking
+            embed_dim: Input embedding dimension
+            hidden_dim: Hidden layer dimension
+            num_layers: Number of MLP layers
         """
         super().__init__()
         
-        self.num_anchors = num_anchors
-        self.embed_dim = embed_dim
-        self.epsilon = epsilon
+        layers = []
+        in_dim = embed_dim
+        for i in range(num_layers - 1):
+            layers.extend([
+                nn.Linear(in_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            ])
+            in_dim = hidden_dim
         
-        # Generate anchors (k, m, b parameters)
-        self.register_buffer('anchors', generate_anchors())
-        assert self.anchors.shape[0] == num_anchors, \
-            f"Number of anchors mismatch: {self.anchors.shape[0]} vs {num_anchors}"
+        # Final layer outputs single logit for binary classification
+        layers.append(nn.Linear(in_dim, 1))
         
-        # Backbone: ResNet50 with FPN
-        self._initialize_backbone()
+        self.mlp = nn.Sequential(*layers)
         
-        # Feature projection to embed_dim
-        self.feature_proj = nn.Conv2d(256, embed_dim, kernel_size=1)
+    def forward(self, x):
+        """
+        Args:
+            x: Input features (B, N, embed_dim)
         
-        # Learnable anchor queries
-        self.anchor_queries = nn.Embedding(num_anchors, embed_dim)
-        
-        # GCHA Decoder
-        self.decoder = GCHADecoder(embed_dim, num_heads, num_decoder_layers, dropout)
-        
-        # Classification head (binary)
-        self.cls_head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim // 2, 1)  # Binary classification
-        )
-        
-        # Regression head (delta_k, delta_m, delta_b)
-        self.reg_head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim, embed_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(embed_dim // 2, 3)  # 3 parameters: delta_k, delta_m, delta_b
-        )
-        
-    def _initialize_backbone(self):
-        """Initialize ResNet50 + FPN backbone layers."""
-        # Load pretrained ResNet50
-        resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
-        
-        # Extract feature extraction layers
-        self.conv1 = resnet.conv1
-        self.bn1 = resnet.bn1
-        self.relu = resnet.relu
-        self.maxpool = resnet.maxpool
-        
-        self.layer1 = resnet.layer1  # 256 channels
-        self.layer2 = resnet.layer2  # 512 channels
-        self.layer3 = resnet.layer3  # 1024 channels
-        self.layer4 = resnet.layer4  # 2048 channels
-        
-        # FPN
-        in_channels_list = [256, 512, 1024, 2048]
-        out_channels = 256
-        self.fpn = FeaturePyramidNetwork(in_channels_list, out_channels)
+        Returns:
+            Classification logits (B, N, 1)
+        """
+        return self.mlp(x)
+
+
+class ParameterRegressionHead(nn.Module):
+    """
+    MLP head for parameter regression (offsets Δk, Δm, Δb).
+    """
     
-    def extract_features(self, x):
-        """Extract features using ResNet50 + FPN.
+    def __init__(self, embed_dim=256, hidden_dim=512, num_layers=3, num_params=3):
+        """
+        Args:
+            embed_dim: Input embedding dimension
+            hidden_dim: Hidden layer dimension
+            num_layers: Number of MLP layers
+            num_params: Number of parameters to regress (default: 3 for Δk, Δm, Δb)
+        """
+        super().__init__()
+        
+        layers = []
+        in_dim = embed_dim
+        for i in range(num_layers - 1):
+            layers.extend([
+                nn.Linear(in_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1)
+            ])
+            in_dim = hidden_dim
+        
+        # Final layer outputs num_params values
+        layers.append(nn.Linear(in_dim, num_params))
+        
+        self.mlp = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: Input features (B, N, embed_dim)
+        
+        Returns:
+            Parameter offsets (B, N, num_params) for [Δk, Δm, Δb]
+        """
+        return self.mlp(x)
+from typing import List, Optional, Tuple
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from modules.gcha_attention import GCHAAttention, GCHABlock
+from utils.anchors import generate_anchor_grid, get_position_encoding
+
+
+class FeatureExtractor(nn.Module):
+    """
+    Feature extraction backbone with hierarchical outputs.
+    
+    This is a simple CNN-based feature extractor that produces multi-scale features.
+    Can be replaced with more sophisticated backbones (ResNet, ViT, etc.).
+    
+    Args:
+        in_channels: Number of input channels
+        base_channels: Base number of channels
+        num_stages: Number of hierarchical stages
+    """
+    
+    def __init__(
+        self,
+        in_channels: int = 3,
+        base_channels: int = 64,
+        num_stages: int = 4
+    ):
+        super().__init__()
+        
+        self.num_stages = num_stages
+        self.stages = nn.ModuleList()
+        
+        current_channels = in_channels
+        for i in range(num_stages):
+            out_channels = base_channels * (2 ** i)
+            stage = nn.Sequential(
+                nn.Conv2d(current_channels, out_channels, kernel_size=3, 
+                         stride=2 if i > 0 else 1, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True)
+            )
+            self.stages.append(stage)
+            current_channels = out_channels
+    
+    def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Extract hierarchical features.
         
         Args:
-            x: Input image tensor of shape (N, 3, H, W)
+            x: Input tensor (B, C, H, W)
             
         Returns:
-            features: FPN feature map of shape (N, 256, H', W')
+            List of feature tensors at different scales
         """
-        # ResNet stem
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        features = []
+        for stage in self.stages:
+            x = stage(x)
+            features.append(x)
+        return features
+
+
+class GCHANet(nn.Module):
+    """
+    GCHA-Net: Geometry-Constrained Highway Attention Network
+    
+    Architecture:
+    1. Backbone: ResNet50 with Feature Pyramid Network (FPN)
+    2. GCHA Decoder: Custom decoder with geometry-constrained attention
+    3. Dual heads: Anchor classification and parameter regression
+    GCHA-Net: Guided Cross-Hierarchical Attention Network.
+    
+    Main network architecture that integrates:
+    - Multi-scale feature extraction
+    - Anchor-based attention guidance
+    - Cross-hierarchical attention fusion
+    
+    Args:
+        in_channels: Number of input channels
+        num_classes: Number of output classes for segmentation
+        embed_dim: Embedding dimension for attention
+        num_heads: Number of attention heads
+        n_anchors: Number of anchor points (N_total)
+        epsilon: Epsilon for numerical stability
+        num_layers: Number of GCHA blocks
+        mlp_ratio: MLP expansion ratio
+        dropout: Dropout probability
+        base_channels: Base channels for feature extractor
+        num_stages: Number of feature extraction stages
+    """
+    
+    def __init__(
+        self,
+        embed_dim=256,
+        num_heads=8,
+        num_decoder_layers=6,
+        num_queries=100,
+        dropout=0.1,
+        pretrained=True
+    ):
+        """
+        Args:
+            embed_dim: Embedding dimension for decoder
+            num_heads: Number of attention heads
+            num_decoder_layers: Number of decoder layers
+            num_queries: Number of query embeddings (anchors)
+            dropout: Dropout probability
+            pretrained: Whether to use pretrained ResNet50 weights
+        """
+        super().__init__()
+        
+        self.num_queries = num_queries
+        self.embed_dim = embed_dim
+        
+        # 1. Backbone: ResNet50
+        if pretrained:
+            self.backbone = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+        else:
+            self.backbone = resnet50(weights=None)
+        
+        # Remove fully connected layer and average pooling
+        self.backbone = nn.ModuleDict({
+            'conv1': self.backbone.conv1,
+            'bn1': self.backbone.bn1,
+            'relu': self.backbone.relu,
+            'maxpool': self.backbone.maxpool,
+            'layer1': self.backbone.layer1,  # C2: 256 channels
+            'layer2': self.backbone.layer2,  # C3: 512 channels
+            'layer3': self.backbone.layer3,  # C4: 1024 channels
+            'layer4': self.backbone.layer4,  # C5: 2048 channels
+        })
+        
+        # 2. Feature Pyramid Network
+        self.fpn = FeaturePyramidNetwork(
+            in_channels_list=[256, 512, 1024, 2048],
+            out_channels=embed_dim
+        )
+        
+        # 3. Query embeddings (learnable)
+        self.query_embed = nn.Embedding(num_queries, embed_dim)
+        
+        # 4. GCHA Decoder
+        self.decoder = GCHADecoder(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            num_layers=num_decoder_layers,
+            dropout=dropout
+        )
+        
+        # 5. Anchor Classification Head
+        self.classification_head = AnchorClassificationHead(embed_dim)
+        
+        # 6. Parameter Regression Head
+        self.regression_head = ParameterRegressionHead(embed_dim)
+        
+        # Initialize only non-backbone parameters
+        self._reset_parameters()
+        
+    def _reset_parameters(self):
+        """Initialize parameters for non-backbone modules."""
+        # Initialize FPN, decoder, and head parameters
+        for module in [self.fpn, self.decoder, self.classification_head, self.regression_head]:
+            for p in module.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+                elif p.dim() == 1:
+                    nn.init.zeros_(p)
+        
+        # Initialize query embeddings
+        nn.init.normal_(self.query_embed.weight, std=0.01)
+    
+    def forward_backbone(self, x):
+        """
+        Extract multi-scale features from ResNet50 backbone.
+        
+        Args:
+            x: Input images (B, 3, H, W)
+        
+        Returns:
+            List of feature maps [C2, C3, C4, C5]
+        """
+        # Initial conv layers
+        x = self.backbone['conv1'](x)
+        x = self.backbone['bn1'](x)
+        x = self.backbone['relu'](x)
+        x = self.backbone['maxpool'](x)
         
         # ResNet stages
-        c1 = self.layer1(x)   # 1/4
-        c2 = self.layer2(c1)  # 1/8
-        c3 = self.layer3(c2)  # 1/16
-        c4 = self.layer4(c3)  # 1/32
+        c2 = self.backbone['layer1'](x)   # 1/4 resolution
+        c3 = self.backbone['layer2'](c2)  # 1/8 resolution
+        c4 = self.backbone['layer3'](c3)  # 1/16 resolution
+        c5 = self.backbone['layer4'](c4)  # 1/32 resolution
         
-        # FPN
-        features_dict = {'0': c1, '1': c2, '2': c3, '3': c4}
-        fpn_features = self.fpn(features_dict)
-        
-        # Use the finest FPN level (typically '0')
-        features = fpn_features['0']
-        
-        return features
+        return [c2, c3, c4, c5]
     
-    def forward(self, x):
-        """Forward pass.
+    def forward(
+        self, 
+        images: torch.Tensor, 
+        geometry_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass through GCHA-Net.
         
         Args:
-            x: Input image tensor of shape (N, 3, H, W)
-            
+            images: Input images (B, 3, H, W)
+            geometry_mask: Static boolean mask M_geo (B, num_queries, H*W) or (num_queries, H*W)
+                          True indicates pixels within polynomial trajectory (to keep)
+                          False indicates pixels outside trajectory (to mask out)
+        
         Returns:
-            cls_logits: Classification logits of shape (N, num_anchors)
-            reg_deltas: Regression deltas of shape (N, num_anchors, 3)
+            Tuple of:
+                - anchor_logits: Binary classification logits (B, num_queries, 1)
+                - param_offsets: Parameter regression outputs (B, num_queries, 3) for [Δk, Δm, Δb]
         """
-        N, _, H, W = x.shape
+        B = images.shape[0]
         
-        # Extract features
-        features = self.extract_features(x)  # [N, 256, H', W']
-        _, _, H_feat, W_feat = features.shape
+        # 1. Extract multi-scale features from backbone
+        feature_maps = self.forward_backbone(images)
         
-        # Project features
-        features = self.feature_proj(features)  # [N, embed_dim, H', W']
+        # 2. Get unified feature map from FPN
+        unified_features = self.fpn(feature_maps)  # (B, embed_dim, H_feat, W_feat)
         
-        # Reshape features for attention: [N, H'*W', embed_dim]
-        features_flat = features.flatten(2).transpose(1, 2)
+        # 3. Flatten spatial dimensions for decoder
+        B, C, H_feat, W_feat = unified_features.shape
+        memory = unified_features.flatten(2).permute(0, 2, 1)  # (B, H_feat*W_feat, embed_dim)
         
-        # Generate geometric masks
-        # Note: For fixed input dimensions, these could be cached to improve performance
-        geometric_masks = generate_geometric_mask(
-            H_feat, W_feat, self.anchors, self.epsilon
-        )  # [num_anchors, H', W']
-        geometric_masks_flat = geometric_masks.flatten(1)  # [num_anchors, H'*W']
+        # 4. Get query embeddings
+        query_embed = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, num_queries, embed_dim)
         
-        # Get anchor queries
-        anchor_queries = self.anchor_queries.weight.unsqueeze(0).expand(N, -1, -1)
-        # [N, num_anchors, embed_dim]
+        # 5. Decode with GCHA decoder
+        decoder_output = self.decoder(query_embed, memory, geometry_mask)  # (B, num_queries, embed_dim)
         
-        # Decode with GCHA decoder
-        decoded_features = self.decoder(anchor_queries, features_flat, geometric_masks_flat)
-        # [N, num_anchors, embed_dim]
+        # 6. Apply prediction heads
+        anchor_logits = self.classification_head(decoder_output)  # (B, num_queries, 1)
+        param_offsets = self.regression_head(decoder_output)      # (B, num_queries, 3)
         
-        # Classification head
-        cls_logits = self.cls_head(decoded_features).squeeze(-1)  # [N, num_anchors]
+        return anchor_logits, param_offsets
+        in_channels: int = 3,
+        num_classes: int = 19,  # Default for cityscapes/agroscapes
+        embed_dim: int = 256,
+        num_heads: int = 8,
+        n_anchors: int = 64,
+        epsilon: float = 1e-6,
+        num_layers: int = 4,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.1,
+        base_channels: int = 64,
+        num_stages: int = 4
+    ):
+        super().__init__()
         
-        # Regression head
-        reg_deltas = self.reg_head(decoded_features)  # [N, num_anchors, 3]
+        self.in_channels = in_channels
+        self.num_classes = num_classes
+        self.embed_dim = embed_dim
+        self.n_anchors = n_anchors
+        self.epsilon = epsilon
+        self.num_stages = num_stages
         
-        return cls_logits, reg_deltas
+        # Feature extraction backbone
+        self.backbone = FeatureExtractor(
+            in_channels=in_channels,
+            base_channels=base_channels,
+            num_stages=num_stages
+        )
+        
+        # Channel projection for each stage
+        self.stage_projections = nn.ModuleList()
+        for i in range(num_stages):
+            stage_channels = base_channels * (2 ** i)
+            self.stage_projections.append(
+                nn.Conv2d(stage_channels, embed_dim, kernel_size=1)
+            )
+        
+        # GCHA transformer blocks
+        self.gcha_blocks = nn.ModuleList([
+            GCHABlock(
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                n_anchors=n_anchors,
+                epsilon=epsilon,
+                mlp_ratio=mlp_ratio,
+                dropout=dropout
+            )
+            for _ in range(num_layers)
+        ])
+        
+        # Cross-hierarchical fusion
+        self.fusion = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(embed_dim, embed_dim, kernel_size=3, padding=1),
+                nn.BatchNorm2d(embed_dim),
+                nn.ReLU(inplace=True)
+            )
+            for _ in range(num_stages)
+        ])
+        
+        # Segmentation head
+        self.decode_head = nn.Sequential(
+            nn.Conv2d(embed_dim * num_stages, embed_dim, kernel_size=3, padding=1),
+            nn.BatchNorm2d(embed_dim),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(embed_dim, embed_dim // 2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(embed_dim // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(embed_dim // 2, num_classes, kernel_size=1)
+        )
+        
+        # Anchor positions (will be initialized in forward)
+        self.register_buffer('anchor_positions', None)
     
-    def get_refined_anchors(self, reg_deltas):
-        """Get refined anchor parameters by applying deltas.
+    def _get_positions(self, height: int, width: int, device: torch.device) -> torch.Tensor:
+        """
+        Generate 2D position grid for feature map.
         
         Args:
-            reg_deltas: Regression deltas of shape (N, num_anchors, 3)
+            height: Height of feature map
+            width: Width of feature map
+            device: Device to place positions on
             
         Returns:
-            refined_anchors: Refined parameters of shape (N, num_anchors, 3)
+            torch.Tensor: Position grid of shape (H*W, 2)
         """
-        # anchors: [num_anchors, 3]
-        # reg_deltas: [N, num_anchors, 3]
-        anchors_expanded = self.anchors.unsqueeze(0)  # [1, num_anchors, 3]
-        refined_anchors = anchors_expanded + reg_deltas
+        y_coords = torch.arange(height, dtype=torch.float32, device=device)
+        x_coords = torch.arange(width, dtype=torch.float32, device=device)
+        yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        positions = torch.stack([yy.flatten(), xx.flatten()], dim=-1)
+        return positions
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of GCHA-Net.
         
-        return refined_anchors
+        Args:
+            x: Input tensor (B, C, H, W)
+            
+        Returns:
+            torch.Tensor: Segmentation output (B, num_classes, H, W)
+        """
+        B, _, H, W = x.shape
+        device = x.device
+        
+        # Extract multi-scale features
+        features = self.backbone(x)  # List of (B, C_i, H_i, W_i)
+        
+        # Process each feature level
+        processed_features = []
+        
+        for i, feat in enumerate(features):
+            _, _, H_i, W_i = feat.shape
+            
+            # Project to embedding dimension
+            feat_proj = self.stage_projections[i](feat)  # (B, embed_dim, H_i, W_i)
+            
+            # Reshape to sequence: (B, embed_dim, H_i, W_i) -> (B, H_i*W_i, embed_dim)
+            feat_seq = feat_proj.flatten(2).transpose(1, 2)
+            
+            # Generate positions
+            positions = self._get_positions(H_i, W_i, device)  # (H_i*W_i, 2)
+            positions_batch = positions.unsqueeze(0).expand(B, -1, -1)  # (B, H_i*W_i, 2)
+            
+            # Generate anchor positions for this scale
+            anchor_pos = generate_anchor_grid(
+                self.n_anchors, (H_i, W_i), device=device
+            )  # (n_anchors, 2)
+            
+            # Apply GCHA blocks
+            for gcha_block in self.gcha_blocks:
+                feat_seq = gcha_block(
+                    feat_seq,
+                    pos=positions_batch,
+                    anchor_pos=anchor_pos
+                )
+            
+            # Reshape back to spatial: (B, H_i*W_i, embed_dim) -> (B, embed_dim, H_i, W_i)
+            feat_spatial = feat_seq.transpose(1, 2).view(B, self.embed_dim, H_i, W_i)
+            
+            # Apply fusion
+            feat_fused = self.fusion[i](feat_spatial)
+            
+            processed_features.append(feat_fused)
+        
+        # Upsample all features to the largest resolution (first feature map size)
+        target_size = (H, W)
+        upsampled_features = []
+        
+        for feat in processed_features:
+            if feat.shape[2:] != target_size:
+                feat_up = nn.functional.interpolate(
+                    feat, size=target_size, mode='bilinear', align_corners=False
+                )
+            else:
+                feat_up = feat
+            upsampled_features.append(feat_up)
+        
+        # Concatenate multi-scale features
+        # Note: This concatenation can use significant memory with many stages
+        # For memory-constrained scenarios, consider:
+        # 1. Progressive fusion (fusing features incrementally)
+        # 2. Learned fusion with 1x1 convs to reduce channels first
+        # 3. Attention-based weighted fusion instead of concatenation
+        fused = torch.cat(upsampled_features, dim=1)  # (B, embed_dim*num_stages, H, W)
+        
+        # Decode to segmentation map
+        output = self.decode_head(fused)  # (B, num_classes, H, W)
+        
+        return output
+    
+    def get_anchor_positions(self, feature_size: Tuple[int, int]) -> torch.Tensor:
+        """
+        Get anchor positions for a given feature size.
+        
+        Args:
+            feature_size: (H, W) of the feature map
+            
+        Returns:
+            torch.Tensor: Anchor positions (n_anchors, 2)
+        """
+        device = next(self.parameters()).device
+        return generate_anchor_grid(self.n_anchors, feature_size, device=device)
+
+
+def build_gcha_net(config: dict) -> GCHANet:
+    """
+    Build GCHA-Net from configuration dictionary.
+    
+    Args:
+        config: Configuration dictionary with model parameters
+        
+    Returns:
+        GCHANet: Initialized model
+    """
+    model = GCHANet(
+        in_channels=config.get('in_channels', 3),
+        num_classes=config.get('num_classes', 19),
+        embed_dim=config.get('embed_dim', 256),
+        num_heads=config.get('num_heads', 8),
+        n_anchors=config.get('n_total', 64),  # N_total parameter
+        epsilon=config.get('epsilon', 1e-6),
+        num_layers=config.get('num_layers', 4),
+        mlp_ratio=config.get('mlp_ratio', 4.0),
+        dropout=config.get('dropout', 0.1),
+        base_channels=config.get('base_channels', 64),
+        num_stages=config.get('num_stages', 4)
+    )
+    return model

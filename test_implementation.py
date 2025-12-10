@@ -1,189 +1,255 @@
-"""Simple validation script for GCHA-Net implementation.
+"""
+Test script to verify GCHA-Net implementation.
 
-This script tests basic functionality of the implemented components.
+This script tests basic functionality of all components without requiring
+a full dataset or training run.
 """
 
-import torch
 import sys
+import os
 
-print("Testing GCHA-Net Implementation...")
-print("=" * 60)
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Test 1: Import modules
-print("\n1. Testing imports...")
-try:
-    from models.gcha_net import GCHANet, GeometryConstrainedAttention, GCHADecoder
-    from utils.geometry import generate_anchors, generate_geometric_mask, polynomial_fit_from_points
-    from datasets.agroscapes import DummyDataset
-    print("✓ All imports successful")
-except Exception as e:
-    print(f"✗ Import failed: {e}")
-    sys.exit(1)
+import torch
+from models.gcha_net import GCHANet, build_gcha_net
+from modules.gcha_attention import GCHAAttention, GCHABlock
+from utils.anchors import (
+    generate_anchor_grid,
+    generate_hierarchical_anchors,
+    compute_anchor_distances,
+    get_position_encoding
+)
+import yaml
 
-# Test 2: Generate anchors
-print("\n2. Testing anchor generation...")
-try:
-    anchors = generate_anchors()
-    assert anchors.shape == (405, 3), f"Expected shape (405, 3), got {anchors.shape}"
-    assert anchors.dtype == torch.float32
-    print(f"✓ Anchors generated: shape={anchors.shape}, dtype={anchors.dtype}")
-    print(f"  Sample anchor: k={anchors[0, 0]:.3f}, m={anchors[0, 1]:.3f}, b={anchors[0, 2]:.3f}")
-except Exception as e:
-    print(f"✗ Anchor generation failed: {e}")
-    sys.exit(1)
 
-# Test 3: Generate geometric mask
-print("\n3. Testing geometric mask generation...")
-try:
-    H, W = 36, 100  # Feature map size
-    test_anchors = anchors[:5]  # Test with 5 anchors
-    masks = generate_geometric_mask(H, W, test_anchors, epsilon=0.05)
-    assert masks.shape == (5, H, W), f"Expected shape (5, {H}, {W}), got {masks.shape}"
+def test_anchor_generation():
+    """Test anchor generation utilities."""
+    print("Testing anchor generation...")
     
-    # Check mask values
-    num_valid = (masks == 0).sum()
-    num_invalid = torch.isinf(masks).sum()
-    print(f"✓ Geometric masks generated: shape={masks.shape}")
-    print(f"  Valid pixels: {num_valid}, Invalid pixels: {num_invalid}")
-except Exception as e:
-    print(f"✗ Geometric mask generation failed: {e}")
-    sys.exit(1)
+    # Test single scale
+    n_total = 64
+    feature_size = (32, 32)
+    anchors = generate_anchor_grid(n_total, feature_size)
+    assert anchors.shape == (n_total, 2), f"Expected shape ({n_total}, 2), got {anchors.shape}"
+    print(f"✓ Single scale anchors: {anchors.shape}")
+    
+    # Test hierarchical
+    feature_sizes = [(64, 64), (32, 32), (16, 16), (8, 8)]
+    hierarchical = generate_hierarchical_anchors(n_total, feature_sizes)
+    assert len(hierarchical) == 4, f"Expected 4 levels, got {len(hierarchical)}"
+    print(f"✓ Hierarchical anchors: {len(hierarchical)} levels")
+    
+    # Test distance computation
+    query_pos = torch.randn(10, 2)
+    anchor_pos = anchors
+    distances = compute_anchor_distances(query_pos, anchor_pos)
+    assert distances.shape == (10, n_total), f"Expected shape (10, {n_total}), got {distances.shape}"
+    print(f"✓ Distance computation: {distances.shape}")
+    
+    # Test position encoding
+    positions = torch.randn(100, 2)
+    pos_enc = get_position_encoding(positions, d_model=256)
+    assert pos_enc.shape == (100, 256), f"Expected shape (100, 256), got {pos_enc.shape}"
+    print(f"✓ Position encoding: {pos_enc.shape}")
+    
+    print("✅ Anchor generation tests passed!\n")
 
-# Test 4: Polynomial fitting
-print("\n4. Testing polynomial fitting...")
-try:
-    # Create sample points
-    points = [[100, 200], [110, 180], [120, 160], [130, 140]]
-    params = polynomial_fit_from_points(points, 288, 800)
-    assert params.shape == (3,), f"Expected shape (3,), got {params.shape}"
-    print(f"✓ Polynomial fit successful: k={params[0]:.3f}, m={params[1]:.3f}, b={params[2]:.3f}")
-except Exception as e:
-    print(f"✗ Polynomial fitting failed: {e}")
-    sys.exit(1)
 
-# Test 5: GeometryConstrainedAttention layer
-print("\n5. Testing GeometryConstrainedAttention layer...")
-try:
+def test_gcha_attention():
+    """Test GCHA attention module."""
+    print("Testing GCHA attention...")
+    
     batch_size = 2
-    num_queries = 10
-    seq_len = 100
-    embed_dim = 256
+    seq_len = 256
+    embed_dim = 128
+    num_heads = 8
+    n_anchors = 32
     
-    gca_layer = GeometryConstrainedAttention(embed_dim=embed_dim, num_heads=8)
-    query = torch.randn(batch_size, num_queries, embed_dim)
-    key = torch.randn(batch_size, seq_len, embed_dim)
-    value = torch.randn(batch_size, seq_len, embed_dim)
-    geo_mask = torch.zeros(num_queries, seq_len)
+    # Create attention layer
+    attn = GCHAAttention(embed_dim, num_heads, n_anchors)
     
-    output = gca_layer(query, key, value, geo_mask)
-    assert output.shape == (batch_size, num_queries, embed_dim)
-    print(f"✓ GeometryConstrainedAttention forward pass successful: {output.shape}")
-except Exception as e:
-    print(f"✗ GeometryConstrainedAttention failed: {e}")
-    sys.exit(1)
+    # Test forward pass
+    x = torch.randn(batch_size, seq_len, embed_dim)
+    pos = torch.randn(batch_size, seq_len, 2)
+    anchor_pos = torch.randn(n_anchors, 2)
+    
+    output, weights = attn(x, query_pos=pos, key_pos=pos, anchor_pos=anchor_pos, need_weights=True)
+    
+    assert output.shape == (batch_size, seq_len, embed_dim), f"Expected shape {(batch_size, seq_len, embed_dim)}, got {output.shape}"
+    assert weights.shape == (batch_size, seq_len, seq_len), f"Expected weights shape {(batch_size, seq_len, seq_len)}, got {weights.shape}"
+    
+    print(f"✓ Attention output: {output.shape}")
+    print(f"✓ Attention weights: {weights.shape}")
+    print("✅ GCHA attention tests passed!\n")
 
-# Test 6: GCHA Decoder
-print("\n6. Testing GCHA Decoder...")
-try:
-    decoder = GCHADecoder(embed_dim=256, num_heads=8, num_layers=3)
-    queries = torch.randn(batch_size, num_queries, 256)
-    features = torch.randn(batch_size, seq_len, 256)
-    geo_masks = torch.zeros(num_queries, seq_len)
-    
-    output = decoder(queries, features, geo_masks)
-    assert output.shape == (batch_size, num_queries, 256)
-    print(f"✓ GCHA Decoder forward pass successful: {output.shape}")
-except Exception as e:
-    print(f"✗ GCHA Decoder failed: {e}")
-    sys.exit(1)
 
-# Test 7: Full GCHA-Net model
-print("\n7. Testing full GCHA-Net model...")
-try:
+def test_gcha_block():
+    """Test GCHA block."""
+    print("Testing GCHA block...")
+    
+    batch_size = 2
+    seq_len = 256
+    embed_dim = 128
+    n_anchors = 32
+    
+    # Create block
+    block = GCHABlock(embed_dim, num_heads=8, n_anchors=n_anchors)
+    
+    # Test forward pass
+    x = torch.randn(batch_size, seq_len, embed_dim)
+    pos = torch.randn(batch_size, seq_len, 2)
+    anchor_pos = torch.randn(n_anchors, 2)
+    
+    output = block(x, pos=pos, anchor_pos=anchor_pos)
+    
+    assert output.shape == (batch_size, seq_len, embed_dim), f"Expected shape {(batch_size, seq_len, embed_dim)}, got {output.shape}"
+    
+    print(f"✓ Block output: {output.shape}")
+    print("✅ GCHA block tests passed!\n")
+
+
+def test_gcha_net():
+    """Test full GCHA-Net model."""
+    print("Testing GCHA-Net model...")
+    
+    batch_size = 1
+    in_channels = 3
+    height, width = 64, 64  # Reduced from 256x256 to avoid memory issues
+    num_classes = 19
+    
+    # Create model
     model = GCHANet(
-        num_anchors=405,
-        embed_dim=256,
-        num_decoder_layers=3,
-        num_heads=8,
-        dropout=0.1,
-        epsilon=0.05
+        in_channels=in_channels,
+        num_classes=num_classes,
+        embed_dim=64,  # Reduced from 128
+        num_heads=4,
+        n_anchors=16,  # Reduced from 32
+        num_layers=1,  # Reduced from 2
+        base_channels=16,  # Reduced from 32
+        num_stages=2  # Reduced from 3
     )
     
     # Test forward pass
+    x = torch.randn(batch_size, in_channels, height, width)
+    output = model(x)
+    
+    assert output.shape == (batch_size, num_classes, height, width), \
+        f"Expected shape {(batch_size, num_classes, height, width)}, got {output.shape}"
+    
+    print(f"✓ Model output: {output.shape}")
+    
+    # Count parameters
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"✓ Total parameters: {num_params:,}")
+    
+    print("✅ GCHA-Net model tests passed!\n")
+
+
+def test_build_from_config():
+    """Test building model from config."""
+    print("Testing model building from config...")
+    
+    # Load config
+    config_path = "config/default.yaml"
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Modify config for smaller test model
+    config['model']['embed_dim'] = 64
+    config['model']['num_layers'] = 1
+    config['model']['base_channels'] = 16
+    config['model']['num_stages'] = 2
+    config['model']['n_total'] = 16
+    config['data']['image_size'] = [64, 64]
+    
+    # Build model
+    model = build_gcha_net(config['model'])
+    
+    # Test forward pass
+    batch_size = 1
+    x = torch.randn(
+        batch_size,
+        config['model']['in_channels'],
+        config['data']['image_size'][0],
+        config['data']['image_size'][1]
+    )
+    
+    output = model(x)
+    
+    expected_shape = (
+        batch_size,
+        config['model']['num_classes'],
+        config['data']['image_size'][0],
+        config['data']['image_size'][1]
+    )
+    
+    assert output.shape == expected_shape, \
+        f"Expected shape {expected_shape}, got {output.shape}"
+    
+    print(f"✓ Model from config output: {output.shape}")
+    print("✅ Config-based building tests passed!\n")
+
+
+def test_mask_generation():
+    """Test attention mask generation."""
+    print("Testing attention mask generation...")
+    
     batch_size = 2
-    input_tensor = torch.randn(batch_size, 3, 288, 800)
+    n_queries = 100
+    n_keys = 100
+    n_anchors = 16
     
-    print("  Running forward pass (this may take a moment)...")
-    cls_logits, reg_deltas = model(input_tensor)
+    attn = GCHAAttention(embed_dim=128, num_heads=4, n_anchors=n_anchors)
     
-    assert cls_logits.shape == (batch_size, 405), f"Expected cls shape (2, 405), got {cls_logits.shape}"
-    assert reg_deltas.shape == (batch_size, 405, 3), f"Expected reg shape (2, 405, 3), got {reg_deltas.shape}"
+    query_pos = torch.randn(batch_size, n_queries, 2)
+    key_pos = torch.randn(batch_size, n_keys, 2)
+    anchor_pos = torch.randn(n_anchors, 2)
     
-    print(f"✓ GCHA-Net forward pass successful")
-    print(f"  Classification logits: {cls_logits.shape}")
-    print(f"  Regression deltas: {reg_deltas.shape}")
+    mask = attn.generate_attention_mask(query_pos, key_pos, anchor_pos)
     
-    # Test get_refined_anchors
-    refined = model.get_refined_anchors(reg_deltas)
-    assert refined.shape == (batch_size, 405, 3)
-    print(f"✓ Anchor refinement successful: {refined.shape}")
+    assert mask.shape == (batch_size, n_queries, n_keys), \
+        f"Expected shape {(batch_size, n_queries, n_keys)}, got {mask.shape}"
     
-except Exception as e:
-    print(f"✗ GCHA-Net model failed: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
+    # Check that mask values are reasonable
+    assert (mask >= 0).all(), "Mask should have non-negative values"
+    
+    print(f"✓ Mask shape: {mask.shape}")
+    print(f"✓ Mask value range: [{mask.min().item():.4f}, {mask.max().item():.4f}]")
+    print("✅ Mask generation tests passed!\n")
 
-# Test 8: Dummy Dataset
-print("\n8. Testing Dummy Dataset...")
-try:
-    dataset = DummyDataset(num_samples=10, image_height=288, image_width=800, max_lanes=4)
-    assert len(dataset) == 10
-    
-    image, targets = dataset[0]
-    assert image.shape == (3, 288, 800)
-    assert targets['lane_params'].shape == (4, 3)
-    assert targets['lane_valid'].shape == (4,)
-    
-    print(f"✓ Dummy dataset working")
-    print(f"  Image shape: {image.shape}")
-    print(f"  Lane params shape: {targets['lane_params'].shape}")
-    print(f"  Valid lanes: {targets['lane_valid'].sum().item()}")
-    
-except Exception as e:
-    print(f"✗ Dataset failed: {e}")
-    sys.exit(1)
 
-# Test 9: DataLoader
-print("\n9. Testing DataLoader...")
-try:
-    from torch.utils.data import DataLoader
+def main():
+    """Run all tests."""
+    print("=" * 60)
+    print("GCHA-Net Implementation Tests")
+    print("=" * 60)
+    print()
     
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-    batch_images, batch_targets = next(iter(dataloader))
-    
-    assert batch_images.shape == (4, 3, 288, 800)
-    assert batch_targets['lane_params'].shape == (4, 4, 3)
-    
-    print(f"✓ DataLoader working")
-    print(f"  Batch images: {batch_images.shape}")
-    print(f"  Batch lane params: {batch_targets['lane_params'].shape}")
-    
-except Exception as e:
-    print(f"✗ DataLoader failed: {e}")
-    sys.exit(1)
+    try:
+        test_anchor_generation()
+        test_gcha_attention()
+        test_gcha_block()
+        test_mask_generation()
+        test_gcha_net()
+        test_build_from_config()
+        
+        print("=" * 60)
+        print("✅ ALL TESTS PASSED!")
+        print("=" * 60)
+        print("\nThe GCHA-Net implementation is working correctly.")
+        print("You can now proceed to train the model with:")
+        print("  python train.py --config config/default.yaml")
+        
+    except Exception as e:
+        print("\n" + "=" * 60)
+        print("❌ TESTS FAILED!")
+        print("=" * 60)
+        print(f"\nError: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
-# Summary
-print("\n" + "=" * 60)
-print("✓ All tests passed successfully!")
-print("=" * 60)
-print("\nImplementation validated. The following components are working:")
-print("  • Anchor generation")
-print("  • Geometric mask generation")
-print("  • Polynomial fitting from points")
-print("  • Geometry-Constrained Attention layer")
-print("  • GCHA Decoder")
-print("  • Full GCHA-Net model")
-print("  • Dataset and DataLoader")
-print("\nYou can now run training with:")
-print("  python train.py --use_dummy --batch_size 2 --max_epochs 5")
+
+if __name__ == '__main__':
+    main()
