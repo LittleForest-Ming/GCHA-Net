@@ -102,6 +102,9 @@ class GCHANetLightning(pl.LightningModule):
         self.cls_weight = config.get('cls_weight', 1.0)
         self.reg_weight = config.get('reg_weight', 1.0)
         
+        # Matching threshold for anchor assignment
+        self.matching_threshold = config.get('matching_threshold', 0.3)
+        
         # Anchors for matching
         self.anchors = generate_anchors()
         
@@ -183,8 +186,11 @@ class GCHANetLightning(pl.LightningModule):
         reg_targets = torch.zeros(batch_size, num_anchors, 3)
         reg_mask = torch.zeros(batch_size, num_anchors, dtype=torch.bool)
         
+        # Move anchors to the same device as lane_params for efficient computation
+        anchors_device = self.anchors.to(lane_params.device)
+        
         # Expand anchors for batch
-        anchors_expanded = self.anchors.unsqueeze(0).unsqueeze(0)
+        anchors_expanded = anchors_device.unsqueeze(0).unsqueeze(0)
         # [1, 1, num_anchors, 3]
         
         for i in range(batch_size):
@@ -198,16 +204,15 @@ class GCHANetLightning(pl.LightningModule):
             # Compute distance between each anchor and each valid lane
             # Use L2 distance in parameter space
             distances = torch.cdist(
-                self.anchors,  # [num_anchors, 3]
-                valid_params   # [num_valid, 3]
+                anchors_device,  # [num_anchors, 3]
+                valid_params     # [num_valid, 3]
             )  # [num_anchors, num_valid]
             
             # Find closest lane for each anchor
             min_distances, closest_lane_idx = distances.min(dim=1)
             
-            # Threshold for positive assignment
-            threshold = 0.3
-            positive_mask = min_distances < threshold
+            # Use configurable threshold for positive assignment
+            positive_mask = min_distances < self.matching_threshold
             
             # Set classification targets
             cls_targets[i, positive_mask] = 1.0
@@ -215,7 +220,7 @@ class GCHANetLightning(pl.LightningModule):
             # Set regression targets (deltas from anchor to closest lane)
             reg_targets[i, positive_mask] = (
                 valid_params[closest_lane_idx[positive_mask]] - 
-                self.anchors[positive_mask]
+                anchors_device[positive_mask]
             )
             reg_mask[i, positive_mask] = True
         
@@ -327,6 +332,8 @@ def main():
                         help='Classification loss weight')
     parser.add_argument('--reg_weight', type=float, default=1.0,
                         help='Regression loss weight')
+    parser.add_argument('--matching_threshold', type=float, default=0.3,
+                        help='Threshold for anchor-to-lane matching in parameter space')
     
     # Other arguments
     parser.add_argument('--output_dir', type=str, default='./outputs',

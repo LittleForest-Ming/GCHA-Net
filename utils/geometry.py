@@ -60,6 +60,9 @@ def generate_geometric_mask(H, W, anchors, epsilon=0.05):
     N = anchors.shape[0]
     device = anchors.device
     
+    # Ensure anchors are on the correct device
+    anchors = anchors.to(device)
+    
     # Create pixel coordinate grids
     # v ranges from 0 to H-1, u ranges from 0 to W-1
     v_coords = torch.arange(H, dtype=torch.float32, device=device)  # [H]

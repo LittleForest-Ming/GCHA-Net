@@ -245,7 +245,7 @@ class GCHANet(nn.Module):
             f"Number of anchors mismatch: {self.anchors.shape[0]} vs {num_anchors}"
         
         # Backbone: ResNet50 with FPN
-        self.backbone = self._build_backbone()
+        self.backbone = self._initialize_backbone()
         
         # Feature projection to embed_dim
         self.feature_proj = nn.Conv2d(256, embed_dim, kernel_size=1)
@@ -278,8 +278,8 @@ class GCHANet(nn.Module):
             nn.Linear(embed_dim // 2, 3)  # 3 parameters: delta_k, delta_m, delta_b
         )
         
-    def _build_backbone(self):
-        """Build ResNet50 + FPN backbone."""
+    def _initialize_backbone(self):
+        """Initialize ResNet50 + FPN backbone layers."""
         # Load pretrained ResNet50
         resnet = resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
         
@@ -298,8 +298,6 @@ class GCHANet(nn.Module):
         in_channels_list = [256, 512, 1024, 2048]
         out_channels = 256
         self.fpn = FeaturePyramidNetwork(in_channels_list, out_channels)
-        
-        return None  # Placeholder since we're using self attributes
     
     def extract_features(self, x):
         """Extract features using ResNet50 + FPN.
