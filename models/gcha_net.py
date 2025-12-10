@@ -20,13 +20,15 @@ class FeaturePyramidNetwork(nn.Module):
     and produces a unified feature map.
     """
     
-    def __init__(self, in_channels_list=[256, 512, 1024, 2048], out_channels=256):
+    def __init__(self, in_channels_list=None, out_channels=256):
         """
         Args:
             in_channels_list: List of channels from ResNet stages (C2, C3, C4, C5)
             out_channels: Output channels for unified feature map
         """
         super().__init__()
+        if in_channels_list is None:
+            in_channels_list = [256, 512, 1024, 2048]
         self.out_channels = out_channels
         
         # Lateral connections (1x1 convolutions to reduce channels)
@@ -447,13 +449,19 @@ class GCHANet(nn.Module):
         # 6. Parameter Regression Head
         self.regression_head = ParameterRegressionHead(embed_dim)
         
+        # Initialize only non-backbone parameters
         self._reset_parameters()
         
     def _reset_parameters(self):
-        """Initialize parameters."""
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+        """Initialize parameters for non-backbone modules."""
+        # Initialize FPN parameters
+        for module in [self.fpn, self.decoder, self.classification_head, self.regression_head]:
+            for p in module.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
+        
+        # Initialize query embeddings
+        nn.init.normal_(self.query_embed.weight, std=0.01)
     
     def forward_backbone(self, x):
         """
