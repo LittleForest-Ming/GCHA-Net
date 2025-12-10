@@ -109,7 +109,9 @@ def test_gcha_net_with_geometry_mask():
     
     # Create geometry mask simulating polynomial trajectory region
     # Shape: (batch_size, num_queries, num_spatial_positions)
-    geometry_mask = torch.rand(batch_size, num_queries, num_spatial) > 0.3
+    # Using 0.3 threshold to create ~70% mask coverage (typical for highway trajectories)
+    MASK_THRESHOLD = 0.3
+    geometry_mask = torch.rand(batch_size, num_queries, num_spatial) > MASK_THRESHOLD
     
     print(f"  Feature map spatial size: {H_feat}x{W_feat} = {num_spatial}")
     print(f"  Geometry mask shape: {geometry_mask.shape}")
