@@ -1,0 +1,105 @@
+# GCHA-Net Default Configuration
+# This file contains hyperparameters for model training and evaluation
+
+# Model Configuration
+model:
+  in_channels: 3
+  num_classes: 19  # For Agroscapes or Cityscapes
+  base_channels: 64
+  num_blocks: [2, 2, 6, 2]  # Number of GCHA blocks per stage
+  num_heads: [2, 4, 8, 16]  # Number of attention heads per stage
+  grid_size: [7, 7]  # Spatial grid size for hierarchical attention
+  N_total: 256  # Total number of attention parameters
+  epsilon: 1.0e-6  # Numerical stability parameter
+  dropout: 0.1
+  task: 'segmentation'  # Options: 'segmentation', 'classification'
+
+# Training Configuration
+training:
+  batch_size: 8
+  num_epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  warmup_epochs: 5
+  
+  # Optimizer settings
+  optimizer: 'adamw'  # Options: 'adam', 'adamw', 'sgd'
+  momentum: 0.9  # For SGD
+  betas: [0.9, 0.999]  # For Adam/AdamW
+  
+  # Learning rate scheduler
+  scheduler: 'cosine'  # Options: 'cosine', 'step', 'poly'
+  min_lr: 0.000001
+  
+  # Loss function
+  loss: 'cross_entropy'  # Options: 'cross_entropy', 'focal', 'dice'
+  label_smoothing: 0.1
+  
+  # Mixed precision training
+  use_amp: true
+  
+  # Gradient clipping
+  grad_clip: 1.0
+
+# Data Configuration
+data:
+  dataset: 'agroscapes'  # Options: 'agroscapes', 'cityscapes', 'ade20k'
+  data_root: './data/agroscapes'
+  num_workers: 4
+  pin_memory: true
+  
+  # Data augmentation
+  augmentation:
+    random_crop: [512, 512]
+    random_flip: true
+    random_scale: [0.5, 2.0]
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+    random_rotation: 10
+  
+  # Normalization (ImageNet statistics)
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+
+# Validation Configuration
+validation:
+  batch_size: 4
+  val_interval: 1  # Validate every N epochs
+  save_predictions: false
+
+# Logging and Checkpointing
+logging:
+  log_interval: 50  # Log every N iterations
+  tensorboard: true
+  wandb: false
+  project_name: 'gcha-net'
+  experiment_name: 'gcha_net_agroscapes'
+  
+checkpoint:
+  save_dir: './checkpoints'
+  save_interval: 5  # Save checkpoint every N epochs
+  keep_last: 3  # Keep last N checkpoints
+  save_best: true  # Save best model based on validation metric
+  metric: 'mIoU'  # Metric to track for best model
+
+# Environment Configuration
+environment:
+  seed: 42
+  device: 'cuda'  # Options: 'cuda', 'cpu'
+  gpu_ids: [0]
+  distributed: false
+  
+  # For distributed training
+  world_size: 1
+  rank: 0
+  dist_backend: 'nccl'
+  dist_url: 'tcp://localhost:23456'
+
+# Anchor Generation (for parameter grid A)
+anchors:
+  num_anchors: 9
+  scales: [0.5, 1.0, 2.0]
+  aspect_ratios: [0.5, 1.0, 2.0]
