@@ -73,10 +73,13 @@ def generate_parameter_grid(
     """
     Generate parameter grid A for GCHA attention.
     
+    The parameter grid can be organized spatially according to grid_size,
+    which helps in establishing spatial correspondence in attention computation.
+    
     Args:
         N_total: Total number of attention parameters
         feature_dim: Dimension of input features
-        grid_size: Spatial grid size for parameter distribution
+        grid_size: Spatial grid size for parameter distribution (used for organization)
         epsilon: Small value for numerical stability
         device: Device to place parameters on
         
@@ -89,6 +92,22 @@ def generate_parameter_grid(
     
     # Add small epsilon for numerical stability
     param_grid = param_grid + epsilon * torch.randn_like(param_grid)
+    
+    # If grid_size is specified and aligns with N_total, apply spatial structure
+    # This helps create spatial coherence in the parameter grid
+    grid_h, grid_w = grid_size
+    if grid_h * grid_w <= N_total and N_total % (grid_h * grid_w) == 0:
+        # Reshape to add spatial structure, then flatten back
+        # This groups parameters by spatial location
+        num_grids = N_total // (grid_h * grid_w)
+        param_grid = param_grid.view(num_grids, grid_h, grid_w, feature_dim)
+        # Apply position encoding to add spatial awareness
+        for i in range(grid_h):
+            for j in range(grid_w):
+                # Add subtle position encoding
+                position_encoding = torch.tensor([i / grid_h, j / grid_w], device=device)
+                param_grid[:, i, j, :2] += position_encoding * 0.01
+        param_grid = param_grid.view(N_total, feature_dim)
     
     return param_grid
 
