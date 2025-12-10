@@ -257,6 +257,11 @@ class GCHANet(nn.Module):
             upsampled_features.append(feat_up)
         
         # Concatenate multi-scale features
+        # Note: This concatenation can use significant memory with many stages
+        # For memory-constrained scenarios, consider:
+        # 1. Progressive fusion (fusing features incrementally)
+        # 2. Learned fusion with 1x1 convs to reduce channels first
+        # 3. Attention-based weighted fusion instead of concatenation
         fused = torch.cat(upsampled_features, dim=1)  # (B, embed_dim*num_stages, H, W)
         
         # Decode to segmentation map

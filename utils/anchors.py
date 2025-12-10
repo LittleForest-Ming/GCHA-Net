@@ -135,7 +135,7 @@ def get_position_encoding(
     d_half = d_model // 2
     div_term = torch.exp(
         torch.arange(0, d_half, 2, dtype=torch.float32, device=positions.device)
-        * -(np.log(temperature) / d_half)
+        * -(torch.log(torch.tensor(temperature, device=positions.device)) / d_half)
     )
     
     # Split into y and x encodings

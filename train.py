@@ -31,14 +31,43 @@ from models.gcha_net import build_gcha_net
 
 class DummySegmentationDataset(Dataset):
     """
-    Dummy dataset for testing. Replace with actual dataset implementation.
+    !!! WARNING: THIS IS A PLACEHOLDER DATASET FOR TESTING ONLY !!!
     
-    For real usage, implement a dataset that loads:
-    - Agroscapes: Agricultural scene images with semantic segmentation
-    - Cityscapes: Urban scene images with semantic segmentation
+    This dummy dataset generates random data and should NOT be used for actual training.
+    
+    For production use, replace this with a proper dataset implementation that loads:
+    - Agroscapes: Agricultural scene images with semantic segmentation labels
+    - Cityscapes: Urban scene images with semantic segmentation labels
+    - Or your custom segmentation dataset
+    
+    Example of real dataset implementation:
+    ```python
+    class AgroscapesDataset(Dataset):
+        def __init__(self, root, split='train', transform=None):
+            self.root = Path(root)
+            self.images = list((self.root / split / 'images').glob('*.png'))
+            self.masks = list((self.root / split / 'masks').glob('*.png'))
+            self.transform = transform
+            
+        def __len__(self):
+            return len(self.images)
+            
+        def __getitem__(self, idx):
+            image = PIL.Image.open(self.images[idx]).convert('RGB')
+            mask = PIL.Image.open(self.masks[idx])
+            if self.transform:
+                image, mask = self.transform(image, mask)
+            return image, mask
+    ```
     """
     
     def __init__(self, size=100, image_size=(512, 512), num_classes=19):
+        print("\n" + "="*60)
+        print("WARNING: Using DummySegmentationDataset (random data)")
+        print("This is for testing only - NOT for actual training!")
+        print("Replace with real dataset for production use.")
+        print("="*60 + "\n")
+        
         self.size = size
         self.image_size = image_size
         self.num_classes = num_classes
