@@ -4,11 +4,6 @@ Tests for prediction heads module
 
 import pytest
 import torch
-import sys
-import os
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from gcha_net.models.prediction_heads import (
     ClassificationHead,
@@ -322,8 +317,3 @@ class TestPredictionHeads:
             
             assert cls_scores.shape[0] == batch_size
             assert bbox_preds.shape[0] == batch_size
-
-
-if __name__ == "__main__":
-    # Run tests
-    pytest.main([__file__, "-v"])
