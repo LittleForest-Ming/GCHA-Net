@@ -233,7 +233,10 @@ class GCHABlock(nn.Module):
             nn.Dropout(dropout)
         )
         
-        num_groups = min(32, in_channels)
+        # Ensure num_groups divides in_channels evenly
+        num_groups = 32
+        while in_channels % num_groups != 0 and num_groups > 1:
+            num_groups //= 2
         self.norm = nn.GroupNorm(num_groups, in_channels)
         
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:

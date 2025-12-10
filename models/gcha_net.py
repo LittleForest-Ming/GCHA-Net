@@ -8,12 +8,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List, Tuple
 
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from modules.gcha_attention import GCHAAttention, GCHABlock
-from utils.anchors import generate_parameter_grid, generate_anchor_grid
+try:
+    from modules.gcha_attention import GCHAAttention, GCHABlock
+    from utils.anchors import generate_parameter_grid, generate_anchor_grid
+except ImportError:
+    # Fallback for when running as a script
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from modules.gcha_attention import GCHAAttention, GCHABlock
+    from utils.anchors import generate_parameter_grid, generate_anchor_grid
 
 
 class GCHAEncoder(nn.Module):
@@ -49,8 +53,10 @@ class GCHAEncoder(nn.Module):
         
         self.num_stages = len(num_blocks)
         
-        # Stem convolution
-        num_groups = min(32, base_channels)
+        # Stem convolution - ensure num_groups divides base_channels
+        num_groups = 32
+        while base_channels % num_groups != 0 and num_groups > 1:
+            num_groups //= 2
         self.stem = nn.Sequential(
             nn.Conv2d(in_channels, base_channels, kernel_size=7, stride=2, padding=3, bias=False),
             nn.GroupNorm(num_groups, base_channels),
@@ -70,7 +76,10 @@ class GCHAEncoder(nn.Module):
             
             # Downsample if not first stage
             if stage_idx > 0:
-                num_groups = min(32, out_channels)
+                # Ensure num_groups divides out_channels
+                num_groups = 32
+                while out_channels % num_groups != 0 and num_groups > 1:
+                    num_groups //= 2
                 stage_blocks.append(
                     nn.Sequential(
                         nn.Conv2d(current_channels, out_channels, kernel_size=3, stride=2, padding=1, bias=False),
@@ -145,7 +154,10 @@ class GCHADecoder(nn.Module):
         self.upsample_blocks = nn.ModuleList()
         
         for i in range(self.num_stages - 1, 0, -1):
-            num_groups = min(32, in_channels_list[i-1])
+            # Ensure num_groups divides channels
+            num_groups = 32
+            while in_channels_list[i-1] % num_groups != 0 and num_groups > 1:
+                num_groups //= 2
             self.upsample_blocks.append(
                 nn.Sequential(
                     nn.ConvTranspose2d(in_channels_list[i], in_channels_list[i-1], kernel_size=2, stride=2),
@@ -155,7 +167,9 @@ class GCHADecoder(nn.Module):
             )
         
         # Final output head
-        num_groups = min(32, out_channels)
+        num_groups = 32
+        while out_channels % num_groups != 0 and num_groups > 1:
+            num_groups //= 2
         self.head = nn.Sequential(
             nn.Conv2d(in_channels_list[0], out_channels, kernel_size=3, padding=1),
             nn.GroupNorm(num_groups, out_channels),

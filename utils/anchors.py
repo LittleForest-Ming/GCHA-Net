@@ -59,7 +59,8 @@ def generate_anchor_grid(
             w, h = base_anchor[2], base_anchor[3]
             anchors.append([cx, cy, w, h])
     
-    anchors = torch.stack([torch.tensor(a, device=device) for a in anchors])
+    # Create tensor directly from list for efficiency
+    anchors = torch.tensor(anchors, dtype=torch.float32, device=device)
     return anchors
 
 
