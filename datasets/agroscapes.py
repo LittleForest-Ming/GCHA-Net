@@ -13,6 +13,14 @@ from PIL import Image
 
 from utils.geometry import polynomial_fit_from_points
 
+ """Dataset for crop row.
+    
+    CULane annotation format:
+    - Each image has a corresponding .txt file with the same name
+    - Each line in the .txt file represents one lane
+    - Each lane is a series of x,y coordinates: x1 y1 x2 y2 x3 y3 ...
+    - If a y-coordinate is missing, it's marked as -2
+    """
 
 class AgriScapesDataset(Dataset):
     """Dataset for AgriScapes with CULane-style lane annotations.
