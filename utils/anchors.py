@@ -1,4 +1,5 @@
 """
+Old Version: Used for secondary prediction offset
 Anchor generation utilities for GCHA-Net.
 
 This module provides functions for generating the parameter grid A (anchors)
