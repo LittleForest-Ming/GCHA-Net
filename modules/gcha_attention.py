@@ -1,4 +1,5 @@
 """
+Old Version: Used for secondary prediction offset
 Geometry-Constrained Hough Attention (GCHA) Layer
 
 This module implements the core GCHA layer which replaces standard cross-attention
