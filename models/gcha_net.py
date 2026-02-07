@@ -1,4 +1,5 @@
 """
+Old Version: Used for secondary prediction offset
 GCHA-Net: Geometry-Constrained Highway Attention Network
 
 This module implements the GCHA-Net architecture with:
