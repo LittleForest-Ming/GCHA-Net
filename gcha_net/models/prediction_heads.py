@@ -1,4 +1,5 @@
 """
+(Old Version: Used for secondary prediction offset)
 Prediction Heads for GCHA-Net
 
 This module implements two parallel prediction heads that operate on decoder output:
