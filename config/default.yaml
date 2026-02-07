@@ -4,12 +4,12 @@
 # Model Architecture
 model:
   in_channels: 3
-  num_classes: 19  # Agroscapes/Cityscapes default
+  num_classes: 2  # default
   embed_dim: 256
   num_heads: 8
   n_total: 64  # Total number of anchors (parameter grid A)
   epsilon: 1.0e-6  # Epsilon for numerical stability in distance computation
-  num_layers: 4  # Number of GCHA transformer blocks
+  num_layers: 2  # Number of GCHA transformer blocks
   mlp_ratio: 4.0
   dropout: 0.1
   base_channels: 64
@@ -42,14 +42,14 @@ training:
 
 # Data
 data:
-  dataset: "agroscapes"  # or "cityscapes"
-  data_root: "./data/agroscapes"
+  dataset: "***"  # or "data_path"
+  data_root: "./data/***"
   train_split: "train"
   val_split: "val"
   test_split: "test"
   
   # Image preprocessing
-  image_size: [512, 512]  # [H, W]
+  image_size: [640, 360]  # [H, W]
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
   
