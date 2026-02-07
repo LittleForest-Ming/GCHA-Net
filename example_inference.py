@@ -1,4 +1,5 @@
 """
+Old Version: Does not involve cubic offset
 Example usage of GCHA-Net for inference.
 
 This script demonstrates how to:
