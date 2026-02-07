@@ -62,8 +62,8 @@ GCHA-Net is a deep learning architecture for highway lane detection with geometr
 
 The model consists of three main components:
 
-### 1. Backbone: ResNet50 + Feature Pyramid Network (FPN)
-- **ResNet50**: Pre-trained on ImageNet for robust feature extraction
+### 1. Backbone: ResNet(18/34/50) + Feature Pyramid Network (FPN)
+- **ResNet**: Pre-trained on ImageNet for robust feature extraction
 - **FPN**: Fuses multi-scale features from ResNet stages (C2, C3, C4, C5) into a unified feature map
 - Output: Unified feature map with 256 channels
 
@@ -254,7 +254,7 @@ output, attn_weights = gcha(
 
 ### Regression Head
 - Processes decoder features through convolutional layers
-- Outputs residual offsets (Δk, Δm, Δb) for each anchor
+- Outputs residual offsets (Δp, Δk, Δm, Δb) for each anchor
 - Shape: `(batch_size, num_anchors * num_params, height, width)`
 
 ### Parallel Processing
@@ -390,7 +390,7 @@ images = torch.randn(2, 3, 224, 224)
 anchor_logits, param_offsets = model(images)
 
 # anchor_logits: (B, num_queries, 1) - binary classification scores
-# param_offsets: (B, num_queries, 3) - [Δk, Δm, Δb] parameter offsets
+# param_offsets: (B, num_queries, 4) - [Δp, Δk, Δm, Δb] parameter offsets
 ```
 
 ### Using Geometry Mask
@@ -451,7 +451,7 @@ Transformer-style decoder with:
 
 ### Prediction Heads
 - **AnchorClassificationHead**: 3-layer MLP for binary classification
-- **ParameterRegressionHead**: 3-layer MLP for 3-parameter regression
+- **ParameterRegressionHead**: 3-layer MLP for 4-parameter regression
 
 ## License
 
@@ -497,7 +497,7 @@ model:
   epsilon: 1.0e-6    # Numerical stability
   embed_dim: 256     # Embedding dimension
   num_heads: 8       # Attention heads
-  num_layers: 4      # GCHA blocks
+  num_layers: 2      # GCHA blocks
 
 training:
   learning_rate: 1.0e-4
@@ -505,9 +505,9 @@ training:
   num_epochs: 100
 
 data:
-  dataset: "agroscapes"
-  data_root: "./data/agroscapes"
-  image_size: [512, 512]
+  dataset: "dataset"
+  data_root: "./data/dataset"
+  image_size: [640, 360]
 ```
 
 ### Custom Dataset
@@ -553,6 +553,7 @@ class CustomDataset(Dataset):
 ## Project Structure
 
 ```
+(Previous Versions)
 GCHA-Net/
 ├── models/
 │   ├── __init__.py
@@ -571,6 +572,32 @@ GCHA-Net/
 └── LICENSE
 
 ```
+```
+(New Version)
+GCHA-Net/
+├── model/
+│   ├── __init__.py
+│   ├── anchors.py
+│   ├── backbone.py
+│   ├── detector.py
+│   ├── matcher.py
+│   ├── Encode-decode.py
+│   └── gcha_net.py           # Main model definition
+├── modules/
+│   ├── __init__.py
+│   └── gcha_attention.py     # GCHA attention layer
+├── utils/
+│   ├── __init__.py
+│   └── dataset.py            # Anchor generation utilities
+├── configs/
+│   ├── __init__.py  
+│   └── config.py           # Configuration file
+├── train_main.py                  # Training script
+├── requirements.txt          # Python dependencies
+├── README.md                 # This file
+└── LICENSE
+
+```
 
 ## Citation
 
@@ -580,11 +607,11 @@ If you use this code in your research, please cite:
 @software{gcha_net,
   title={GCHA-Net: Geometry-Constrained Hough Attention Network},
   author={LittleForest-Ming},
-  year={2024},
+  year={2026},
 @misc{gcha-net,
   title={GCHA-Net: Guided Cross-Hierarchical Attention Network},
-  author={Your Name},
-  year={2025},
+  author={LittleForest-Ming},
+  year={2026},
   url={https://github.com/LittleForest-Ming/GCHA-Net}
 }
 ```
@@ -599,5 +626,4 @@ This project is licensed under the terms specified in the LICENSE file.
 ## Acknowledgments
 
 - PyTorch and PyTorch Lightning communities
-- Agroscapes dataset providers
 - Vision transformer and attention mechanism research
