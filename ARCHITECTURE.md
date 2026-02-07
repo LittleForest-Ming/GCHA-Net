@@ -6,7 +6,7 @@ GCHA-Net (Geometry-Constrained Hierarchical Attention Network) is a novel deep l
 
 ## Model Statistics
 
-- **Total Parameters**: 30,380,612 (~30.4M)
+- **Total Parameters**: 30,380,612 
 - **Input Size**: (Batch, 3, 288, 800) - RGB images
 - **Output**: 
   - Classification logits: (Batch, 405) - Binary classification for each anchor
