@@ -1,4 +1,4 @@
-# GCHA-Net Architecture Documentation
+# GCHA-Net Architecture Documentation --- Old Version: Does not involve cubic offset
 
 ## Overview
 
@@ -14,7 +14,7 @@ GCHA-Net (Geometry-Constrained Hierarchical Attention Network) is a novel deep l
 
 ## Architecture Components
 
-### 1. Backbone: ResNet50 + FPN
+### 1. Backbone: ResNet18/34/50 + FPN
 
 The backbone extracts multi-scale features from input images:
 
