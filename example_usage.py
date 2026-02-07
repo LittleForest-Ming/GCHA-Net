@@ -1,4 +1,5 @@
 """
+Old Version: Does not involve cubic offset
 Example usage of the GCHA Layer
 
 This script demonstrates how to use the Geometry-Constrained Hough Attention (GCHA) layer
