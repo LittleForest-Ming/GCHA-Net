@@ -21,6 +21,7 @@ class Config:
     LR_BACKBONE = 1e-5  # 甚至 1e-6
     LR_TRANSFORMER = 1e-4
     WEIGHT_DECAY = 1e-4
+    MOMENTUM=0.9
 
     MASK_THRESHOLD = 0.03
     BATCH_SIZE = 8
@@ -33,3 +34,4 @@ class Config:
     # --- 路径 (请根据您的实际路径修改) ---
 
     DATA_ROOT = r""
+
