@@ -25,10 +25,11 @@ class Config:
     MASK_THRESHOLD = 0.03
     BATCH_SIZE = 8
     LR = 1e-4
-    EPOCHS = 400
+    EPOCHS = 2000
     HIDDEN_DIM = 256
     NUM_HEADS = 8
     NUM_LAYERS = 2
 
     # --- 路径 (请根据您的实际路径修改) ---
-    DATA_ROOT = r"E:\PythonProject\crop protection\crop row detection\Dataset"
+
+    DATA_ROOT = r""
