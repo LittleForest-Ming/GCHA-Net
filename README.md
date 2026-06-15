@@ -1,6 +1,6 @@
 # GCHA-Net
 
-Graph-based Cross-modal Hierarchical Attention Network with Parallel Prediction Heads
+The project includes two distinct versions: one adopts directly predefined geometric constraints, while the other performs fine-tuning via triple residual modules. Please distinguish between the two configurations clearly.
 
 ## Overview
 
